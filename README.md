@@ -9,6 +9,7 @@ and supports both local stdio clients and deployed Streamable HTTP clients such 
 - Read validated abstracts, Structured Summary JSON, outlines, and notes.
 - Search bounded full-text sections with source pages and artifact hashes.
 - Browse tags and ordered collections without exposing managed filesystem paths.
+- Read existing collection syntheses and research reports with stale-source status.
 - Read stable `passagen://` resource templates.
 - Serve local clients over stdio or remote clients over authenticated Streamable HTTP.
 
@@ -59,6 +60,9 @@ Tools:
 - `search_paper_sections`
 - `list_collections`
 - `list_tags`
+- `get_collection_context`
+- `list_collection_reports`
+- `get_collection_report`
 
 Resource templates:
 
@@ -69,10 +73,14 @@ passagen://papers/{paper_id}/summary
 passagen://papers/{paper_id}/outline
 passagen://papers/{paper_id}/sections/{ordinal}
 passagen://collections/{collection_id}
+passagen://collections/{collection_id}/synthesis
+passagen://collections/{collection_id}/reports/{report_id}
 ```
 
 `title_query` searches paper titles only. `search_paper_sections` performs bounded English lexical
-search over extracted full-text artifacts and does not modify the library.
+search over extracted full-text artifacts and does not modify the library. Collection intelligence
+tools only read already persisted syntheses and reports; they never submit generation jobs or call
+an LLM.
 
 ## Development
 

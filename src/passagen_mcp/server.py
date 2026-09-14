@@ -13,6 +13,7 @@ from mcp.server.mcpserver.exceptions import (
 )
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
+from passagen.assistant.errors import AssistantError, AssistantNotFoundError
 from passagen.catalog import (
     CatalogBusyError,
     CatalogError,
@@ -32,7 +33,10 @@ from passagen_mcp.auth import BearerAuthMiddleware
 from passagen_mcp.config import HttpSettings
 from passagen_mcp.library import LibraryReader, LibraryRequestError
 from passagen_mcp.schemas import (
+    CollectionContextResult,
     CollectionListResult,
+    CollectionReportListResult,
+    CollectionReportView,
     ContextPart,
     PaperContextResult,
     PaperListResult,
@@ -158,6 +162,32 @@ def create_server(library: LibraryReader) -> MCPServer:
         """List canonical tag IDs, names, colors, and paper usage counts."""
         return library.list_tags()
 
+    @mcp.tool(title="Get collection context", annotations=READ_ONLY)
+    @_tool_errors
+    def get_collection_context(
+        collection_id: str,
+        include_papers: bool = True,
+        include_synthesis: bool = True,
+    ) -> CollectionContextResult:
+        """Read a collection's ordered papers and latest persisted synthesis when available."""
+        return library.get_collection_context(
+            collection_id,
+            include_papers=include_papers,
+            include_synthesis=include_synthesis,
+        )
+
+    @mcp.tool(title="List collection reports", annotations=READ_ONLY)
+    @_tool_errors
+    def list_collection_reports(collection_id: str) -> CollectionReportListResult:
+        """List persisted research reports and lifecycle or stale-source status."""
+        return library.list_collection_reports(collection_id)
+
+    @mcp.tool(title="Get collection report", annotations=READ_ONLY)
+    @_tool_errors
+    def get_collection_report(collection_id: str, report_id: str) -> CollectionReportView:
+        """Read one persisted collection report with citations and safe artifact metadata."""
+        return library.get_collection_report(collection_id, report_id)
+
     @mcp.resource("passagen://papers/{paper_id}", mime_type="application/json")
     @_resource_errors
     def paper_metadata(paper_id: str) -> dict[str, Any]:
@@ -203,6 +233,26 @@ def create_server(library: LibraryReader) -> MCPServer:
         """Collection metadata and ordered compact paper membership."""
         return library.get_collection(collection_id).model_dump(mode="json")
 
+    @mcp.resource("passagen://collections/{collection_id}/synthesis", mime_type="application/json")
+    @_resource_errors
+    def collection_synthesis(collection_id: str) -> dict[str, Any]:
+        """Latest persisted collection synthesis with coverage and stale-source status."""
+        result = library.get_collection_context(
+            collection_id, include_papers=False, include_synthesis=True
+        )
+        if result.synthesis is None:
+            raise CatalogNotFoundError(f"Synthesis not found for collection: {collection_id}")
+        return result.synthesis.model_dump(mode="json")
+
+    @mcp.resource(
+        "passagen://collections/{collection_id}/reports/{report_id}",
+        mime_type="application/json",
+    )
+    @_resource_errors
+    def collection_report(collection_id: str, report_id: str) -> dict[str, Any]:
+        """One persisted collection research report with citations and source status."""
+        return library.get_collection_report(collection_id, report_id).model_dump(mode="json")
+
     @mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
     async def health(_request: Request) -> Response:
         return JSONResponse({"status": "ok", "version": __version__})
@@ -231,11 +281,11 @@ def _tool_errors[**P, R](function: Callable[P, R]) -> Callable[P, R]:
     def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             return function(*args, **kwargs)
-        except (LibraryRequestError, CatalogNotFoundError) as exc:
+        except (LibraryRequestError, CatalogNotFoundError, AssistantNotFoundError) as exc:
             raise ToolError(str(exc)) from exc
         except CatalogBusyError as exc:
             raise ToolError(f"Library is busy; retry this operation: {exc}") from exc
-        except (InvalidArtifactError, CatalogError) as exc:
+        except (InvalidArtifactError, CatalogError, AssistantError) as exc:
             raise ToolError(f"Passagen library error: {exc}") from exc
 
     return wrapped
@@ -246,9 +296,9 @@ def _resource_errors[**P, R](function: Callable[P, R]) -> Callable[P, R]:
     def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             return function(*args, **kwargs)
-        except CatalogNotFoundError as exc:
+        except (CatalogNotFoundError, AssistantNotFoundError) as exc:
             raise ResourceNotFoundError(str(exc)) from exc
-        except (InvalidArtifactError, CatalogError, LibraryRequestError) as exc:
+        except (InvalidArtifactError, CatalogError, LibraryRequestError, AssistantError) as exc:
             raise ResourceError(str(exc)) from exc
 
     return wrapped

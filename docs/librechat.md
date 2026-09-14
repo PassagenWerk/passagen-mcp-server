@@ -64,6 +64,17 @@ mcpServers:
 Restart LibreChat after editing `librechat.yaml`. The bearer token must have the same value in the
 LibreChat and Passagen MCP containers. Never commit it to either repository.
 
+## Collection Intelligence
+
+LibreChat can use `get_collection_context` to read an ordered collection together with its latest
+persisted synthesis. It can use `list_collection_reports` and `get_collection_report` to discover
+and read persisted research reports. Equivalent synthesis and report resource templates are also
+available to MCP clients.
+
+These interfaces are read-only. They do not start synthesis or report generation and do not call an
+LLM. Responses include source-staleness reasons and safe artifact metadata, but omit managed
+filesystem paths and internal failure details.
+
 ## Host Deployment
 
 When Passagen MCP runs on the Docker host rather than in the LibreChat network, bind it to a

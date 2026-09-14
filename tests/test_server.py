@@ -26,6 +26,9 @@ async def test_tools_return_structured_content(library: LibraryReader) -> None:
         "search_paper_sections",
         "list_collections",
         "list_tags",
+        "get_collection_context",
+        "list_collection_reports",
+        "get_collection_report",
     }
     assert all(tool.annotations and tool.annotations.read_only_hint for tool in listed.tools)
     assert result.is_error is False
@@ -41,13 +44,34 @@ async def test_resources_read_validated_content(library: LibraryReader) -> None:
         summary = await client.read_resource("passagen://papers/paper-a/summary")
         section = await client.read_resource("passagen://papers/paper-a/sections/1")
 
-    assert len(templates.resource_templates) == 6
+    assert len(templates.resource_templates) == 8
     assert isinstance(summary.contents[0], TextResourceContents)
     assert isinstance(section.contents[0], TextResourceContents)
     summary_content = json.loads(summary.contents[0].text)
     section_content = json.loads(section.contents[0].text)
     assert summary_content["schema_version"] == "2"
     assert section_content["pages"] == [7, 8]
+
+
+@pytest.mark.anyio
+async def test_collection_intelligence_tools_and_resources(library: LibraryReader) -> None:
+    collection_id = library.list_collections().items[0].id
+    server = create_server(library)
+    async with Client(server, raise_exceptions=True) as client:
+        reports = await client.call_tool(
+            "list_collection_reports", {"collection_id": collection_id}
+        )
+        synthesis = await client.read_resource(f"passagen://collections/{collection_id}/synthesis")
+        report = await client.read_resource(
+            f"passagen://collections/{collection_id}/reports/report-1"
+        )
+
+    assert reports.structured_content is not None
+    assert reports.structured_content["items"][0]["id"] == "report-1"
+    assert isinstance(synthesis.contents[0], TextResourceContents)
+    assert isinstance(report.contents[0], TextResourceContents)
+    assert json.loads(synthesis.contents[0].text)["synthesis"]["schema_version"] == "2"
+    assert json.loads(report.contents[0].text)["report"]["title"] == "Latency review"
 
 
 @pytest.mark.anyio

@@ -147,6 +147,65 @@ class CollectionDetail(CollectionItem):
     papers: list[CollectionMember]
 
 
+class SourceStatusView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    stale: bool
+    reasons: list[str]
+
+
+class CollectionArtifactRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    kind: str
+    version: str
+    sha256: str
+    size_bytes: int
+    created_at: str
+
+
+class CollectionSynthesisView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    collection_id: str
+    run_id: str | None
+    synthesis: dict[str, Any]
+    artifacts: list[CollectionArtifactRef]
+    source_status: SourceStatusView
+    resource_uri: str
+
+
+class CollectionContextResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    collection: CollectionItem
+    papers: list[CollectionMember] | None = None
+    synthesis: CollectionSynthesisView | None = None
+    unavailable: list[UnavailableContent] = Field(default_factory=list)
+
+
+class CollectionReportItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    collection_id: str
+    kind: str
+    status: str
+    title: str
+    user_prompt: str | None
+    run_id: str | None
+    created_at: str
+    completed_at: str | None
+    source_status: SourceStatusView
+    resource_uri: str
+
+
+class CollectionReportListResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[CollectionReportItem]
+
+
+class CollectionReportView(CollectionReportItem):
+    report: dict[str, Any] | None
+    artifacts: list[CollectionArtifactRef]
+
+
 class SectionHit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     paper_id: str

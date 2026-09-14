@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from passagen.catalog import PaperSort, SortDirection, TagMatch
+from passagen.catalog import CatalogNotFoundError, PaperSort, SortDirection, TagMatch
 
 from passagen_mcp.library import LibraryReader, LibraryRequestError
 from passagen_mcp.schemas import ContextPart, SummarySection
@@ -95,3 +95,40 @@ def test_collection_preserves_member_order(library: LibraryReader) -> None:
     assert collection.paper_count == 2
     assert [member.paper.id for member in detail.papers] == ["paper-b", "paper-a"]
     assert [member.position for member in detail.papers] == [0, 1]
+
+
+def test_collection_context_reads_safe_persisted_synthesis(library: LibraryReader) -> None:
+    collection = library.list_collections().items[0]
+    context = library.get_collection_context(collection.id)
+
+    assert context.papers is not None
+    assert context.synthesis is not None
+    assert context.synthesis.synthesis["executive_overview"] == (
+        "The collection studies system latency."
+    )
+    assert context.synthesis.source_status.stale is True
+    assert context.synthesis.source_status.reasons == ["source_manifest_missing"]
+    assert context.synthesis.artifacts[0].kind == "synthesis_json"
+    assert all("path" not in artifact.model_dump() for artifact in context.synthesis.artifacts)
+
+
+def test_collection_reports_list_and_read_without_paths(library: LibraryReader) -> None:
+    collection = library.list_collections().items[0]
+    listed = library.list_collection_reports(collection.id)
+    detail = library.get_collection_report(collection.id, "report-1")
+
+    assert [(item.id, item.status, item.kind) for item in listed.items] == [
+        ("report-1", "completed", "review")
+    ]
+    assert listed.items[0].source_status.stale is True
+    assert detail.report is not None
+    assert detail.report["title"] == "Latency review"
+    assert detail.artifacts[0].sha256
+    assert all("path" not in artifact.model_dump() for artifact in detail.artifacts)
+
+
+def test_report_must_belong_to_requested_collection(library: LibraryReader) -> None:
+    other = library.catalog.create_collection("Other")
+
+    with pytest.raises(CatalogNotFoundError, match="Collection report not found"):
+        library.get_collection_report(other.id, "report-1")

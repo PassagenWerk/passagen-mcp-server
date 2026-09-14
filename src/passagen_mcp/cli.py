@@ -65,7 +65,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
     try:
         settings = LibrarySettings.load(args.data_dir, config_path=args.config)
-        library = LibraryReader(settings.database_path, settings.data_dir)
+        library = LibraryReader(
+            settings.database_path,
+            settings.data_dir,
+            settings.core.providers.llm,
+            settings.core.assistant,
+        )
         mcp = create_server(library)
         _configure_logging()
         if args.command == "stdio":

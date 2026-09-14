@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from passagen.catalog import CatalogService
 from passagen.parsing import ParsedPaper, ParsedSection
+from passagen.research import CollectionReport, CollectionSynthesis
 from passagen.storage.database import connect_database, initialize_database
 
 from passagen_mcp.library import LibraryReader
@@ -94,6 +95,7 @@ def data_dir(tmp_path: Path) -> Path:
     catalog.set_paper_tags("paper-b", [systems.id])
     reading = catalog.create_collection("Reading Queue", "Papers to review")
     catalog.add_collection_papers(reading.id, ["paper-b", "paper-a"])
+    _seed_collection_research(path, reading.id)
     return path
 
 
@@ -129,4 +131,110 @@ def _artifact(
                 hashlib.sha256(content).hexdigest(),
                 len(content),
             ),
+        )
+
+
+def _seed_collection_research(data_dir: Path, collection_id: str) -> None:
+    summary_sha = hashlib.sha256(
+        (data_dir / "papers/paper-a/summary.json").read_bytes()
+    ).hexdigest()
+    citation = {
+        "citation_id": "c-1",
+        "paper_id": "paper-a",
+        "artifact_kind": "summary_json",
+        "artifact_id": "paper-a-summary_json",
+        "artifact_sha256": summary_sha,
+        "summary_path": "problem.problem_statement",
+    }
+    synthesis = CollectionSynthesis.model_validate(
+        {
+            "executive_overview": "The collection studies system latency.",
+            "claims": [{"text": "Latency is a shared concern.", "citation_ids": ["c-1"]}],
+            "citations": [citation],
+            "coverage": {
+                "included_paper_ids": ["paper-a"],
+                "missing_summary_paper_ids": ["paper-b"],
+                "partial": True,
+            },
+        }
+    )
+    report = CollectionReport.model_validate(
+        {
+            "kind": "review",
+            "title": "Latency review",
+            "coverage": synthesis.coverage.model_dump(),
+            "sections": [
+                {
+                    "heading": "Overview",
+                    "body_markdown": "The collection studies latency [c-1].",
+                }
+            ],
+            "claims": synthesis.claims,
+            "citations": [citation],
+        }
+    )
+    synthesis_content = synthesis.model_dump_json().encode()
+    report_content = report.model_dump_json().encode()
+    synthesis_path = data_dir / "collections/synthesis.json"
+    report_path = data_dir / "collections/report.json"
+    synthesis_path.parent.mkdir(parents=True, exist_ok=True)
+    synthesis_path.write_bytes(synthesis_content)
+    report_path.write_bytes(report_content)
+    fingerprint = "f" * 64
+    with connect_database(data_dir / "passagen.db") as connection:
+        connection.execute(
+            """
+            INSERT INTO generation_runs (id, kind, collection_id, status)
+            VALUES ('synthesis-run', 'collection_synthesis', ?, 'completed'),
+                   ('report-run', 'report', ?, 'completed')
+            """,
+            (collection_id, collection_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO collection_artifacts
+                (id, collection_id, generation_run_id, kind, path, version, sha256,
+                 size_bytes, source_fingerprint)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "synthesis-artifact",
+                collection_id,
+                "synthesis-run",
+                "synthesis_json",
+                "collections/synthesis.json",
+                "2",
+                hashlib.sha256(synthesis_content).hexdigest(),
+                len(synthesis_content),
+                fingerprint,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO collection_artifacts
+                (id, collection_id, generation_run_id, kind, path, version, sha256,
+                 size_bytes, source_fingerprint)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "report-artifact",
+                collection_id,
+                "report-run",
+                "report_json",
+                "collections/report.json",
+                "1",
+                hashlib.sha256(report_content).hexdigest(),
+                len(report_content),
+                fingerprint,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO collection_reports
+                (id, collection_id, kind, status, title, source_snapshot_json,
+                 source_fingerprint, run_id, report_artifact_id, completed_at)
+            VALUES ('report-1', ?, 'review', 'completed', 'Latency review', '{}', ?,
+                    'report-run', 'report-artifact', CURRENT_TIMESTAMP)
+            """,
+            (collection_id, fingerprint),
         )

@@ -19,8 +19,12 @@ from passagen.catalog import (
     TagMatch,
     validate_summary_json,
 )
+from passagen.config import AssistantSettings, LlmSettings
 from passagen.domain import PaperStatus
 from passagen.parsing import ParsedPaper
+from passagen.research import CollectionReportService, CollectionSynthesisService
+from passagen.research.schemas import CollectionArtifact
+from passagen.research.schemas import CollectionReportView as CoreReportView
 from passagen.stages.abstract_fixing import load_cleaned_abstract
 from passagen.storage.repository import get_artifact
 from pydantic import ValidationError
@@ -28,11 +32,17 @@ from pydantic import ValidationError
 from passagen_mcp.schemas import (
     AbstractContent,
     ArtifactAvailability,
+    CollectionArtifactRef,
+    CollectionContextResult,
     CollectionDetail,
     CollectionItem,
     CollectionListResult,
     CollectionMember,
     CollectionRef,
+    CollectionReportItem,
+    CollectionReportListResult,
+    CollectionReportView,
+    CollectionSynthesisView,
     ContextPart,
     PaperContextResult,
     PaperListItem,
@@ -40,6 +50,7 @@ from passagen_mcp.schemas import (
     PaperMetadata,
     SectionHit,
     SectionSearchResult,
+    SourceStatusView,
     SummarySection,
     TagItem,
     TagListResult,
@@ -58,10 +69,23 @@ class LibraryRequestError(ValueError):
 class LibraryReader:
     """Read-only, agent-oriented projection over a Passagen library."""
 
-    def __init__(self, database_path: Path, data_dir: Path) -> None:
+    def __init__(
+        self,
+        database_path: Path,
+        data_dir: Path,
+        llm_settings: LlmSettings | None = None,
+        assistant_settings: AssistantSettings | None = None,
+    ) -> None:
         self.database_path = database_path.expanduser().resolve()
         self.data_dir = data_dir.expanduser().resolve()
         self.catalog = CatalogService(self.database_path, self.data_dir)
+        llm = llm_settings or LlmSettings()
+        self.syntheses = CollectionSynthesisService(
+            self.database_path, self.data_dir, llm, assistant_settings
+        )
+        self.reports = CollectionReportService(
+            self.database_path, self.data_dir, llm, assistant_settings
+        )
 
     def list_papers(
         self,
@@ -203,6 +227,55 @@ class LibraryReader:
                 )
                 for member in collection.papers
             ],
+        )
+
+    def get_collection_context(
+        self,
+        collection_id: str,
+        *,
+        include_papers: bool = True,
+        include_synthesis: bool = True,
+    ) -> CollectionContextResult:
+        detail = self.get_collection(collection_id)
+        result = CollectionContextResult(
+            collection=CollectionItem.model_validate(detail.model_dump(exclude={"papers"})),
+            papers=detail.papers if include_papers else None,
+        )
+        if include_synthesis:
+            synthesis = self.syntheses.latest(collection_id)
+            if synthesis is None:
+                result.unavailable.append(
+                    UnavailableContent(kind="synthesis", reason="artifact_not_generated")
+                )
+            else:
+                result.synthesis = CollectionSynthesisView(
+                    collection_id=collection_id,
+                    run_id=synthesis.run_id,
+                    synthesis=synthesis.synthesis.model_dump(mode="json"),
+                    artifacts=[self._collection_artifact(item) for item in synthesis.artifacts],
+                    source_status=SourceStatusView(
+                        stale=synthesis.source_status.stale,
+                        reasons=list(synthesis.source_status.reasons),
+                    ),
+                    resource_uri=f"passagen://collections/{collection_id}/synthesis",
+                )
+        return result
+
+    def list_collection_reports(self, collection_id: str) -> CollectionReportListResult:
+        self.catalog.get_collection(collection_id)
+        return CollectionReportListResult(
+            items=[self._report_item(view) for view in self.reports.list_reports(collection_id)]
+        )
+
+    def get_collection_report(self, collection_id: str, report_id: str) -> CollectionReportView:
+        self.catalog.get_collection(collection_id)
+        view = self.reports.get_report(report_id)
+        if view.record.collection_id != collection_id:
+            raise CatalogNotFoundError(f"Collection report not found: {report_id}")
+        return CollectionReportView(
+            **self._report_item(view).model_dump(),
+            report=view.report.model_dump(mode="json") if view.report is not None else None,
+            artifacts=[self._collection_artifact(item) for item in view.artifacts],
         )
 
     def search_sections(
@@ -394,6 +467,35 @@ class LibraryReader:
             updated_at=collection.updated_at,
             paper_count=paper_count,
             resource_uri=f"passagen://collections/{collection.id}",
+        )
+
+    def _report_item(self, view: CoreReportView) -> CollectionReportItem:
+        record = view.record
+        return CollectionReportItem(
+            id=record.id,
+            collection_id=record.collection_id,
+            kind=record.kind.value,
+            status=record.status,
+            title=record.title,
+            user_prompt=record.user_prompt,
+            run_id=record.run_id,
+            created_at=record.created_at,
+            completed_at=record.completed_at,
+            source_status=SourceStatusView(
+                stale=view.source_status.stale,
+                reasons=list(view.source_status.reasons),
+            ),
+            resource_uri=(f"passagen://collections/{record.collection_id}/reports/{record.id}"),
+        )
+
+    def _collection_artifact(self, artifact: CollectionArtifact) -> CollectionArtifactRef:
+        return CollectionArtifactRef(
+            id=artifact.id,
+            kind=artifact.kind,
+            version=artifact.version,
+            sha256=artifact.sha256,
+            size_bytes=artifact.size_bytes,
+            created_at=artifact.created_at,
         )
 
     def _abstract(self, paper: PaperView, *, prefer_cleaned: bool) -> AbstractContent | None:
