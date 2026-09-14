@@ -1,0 +1,80 @@
+name: Publish Docker image
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing MCP Server tag to publish (for example, v0.1.0)
+        required: true
+        type: string
+      core_ref:
+        description: Compatible Passagen Core tag
+        required: true
+        default: v0.7.0
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+  CORE_REF: ${{ inputs.core_ref || 'v0.7.0' }}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Passagen MCP Server
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Check out matching Passagen Core
+        uses: actions/checkout@v4
+        with:
+          repository: PassagenWerk/passagen-core
+          ref: ${{ env.CORE_REF }}
+          path: _build/passagen-core
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: docker.io/sycstudio/passagen-mcp-server
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=Passagen MCP Server
+            org.opencontainers.image.description=Read-only MCP access to Passagen paper libraries
+            org.opencontainers.image.licenses=AGPL-3.0-only
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          build-contexts: |
+            passagen-core=./_build/passagen-core
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

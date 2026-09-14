@@ -13,6 +13,11 @@ dependencies = [
     "uvicorn>=0.35,<1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/PassagenWerk/passagen-mcp-server"
+Repository = "https://github.com/PassagenWerk/passagen-mcp-server"
+Issues = "https://github.com/PassagenWerk/passagen-mcp-server/issues"
+
 [tool.uv.sources]
 passagen-core = { path = "../passagen-core", editable = true }
 
