@@ -39,6 +39,7 @@ from passagen_mcp.schemas import (
     CollectionReportListResult,
     CollectionReportView,
     ContextPart,
+    PaperCitationResult,
     PaperContextResult,
     PaperListResult,
     SectionSearchResult,
@@ -48,6 +49,12 @@ from passagen_mcp.schemas import (
 
 logger = logging.getLogger(__name__)
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+CITATION_READ = ToolAnnotations(
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=True,
+)
 CREATE = ToolAnnotations(
     read_only_hint=False,
     destructive_hint=False,
@@ -148,6 +155,12 @@ def create_server(library: LibraryReader, *, allow_write: bool = False) -> MCPSe
             summary_sections=summary_sections or (),
             prefer_cleaned_abstract=prefer_cleaned_abstract,
         )
+
+    @mcp.tool(title="Get paper citation", annotations=CITATION_READ)
+    @_tool_errors
+    def get_paper_citation(paper_id: str, refresh: bool = False) -> PaperCitationResult:
+        """Get persisted BibTeX, materializing or refreshing it from DOI/local metadata."""
+        return library.get_paper_citation(paper_id, refresh=refresh)
 
     @mcp.tool(title="Search paper sections", annotations=READ_ONLY)
     @_tool_errors

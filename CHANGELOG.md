@@ -11,6 +11,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Added opt-in tools to create collections and append existing papers, with write access disabled
   by default and authenticated HTTP required when enabled.
+- Added `get_paper_citation` for persisted BibTeX retrieval with provenance, cache state, and
+  optional refresh.
 
 ### Changed
 

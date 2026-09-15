@@ -75,6 +75,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             settings.data_dir,
             settings.core.providers.llm,
             settings.core.assistant,
+            settings.core.providers.crossref.timeout_seconds,
         )
         mcp = create_server(library, allow_write=args.allow_write)
         _configure_logging()

@@ -19,6 +19,7 @@ from passagen.catalog import (
     TagMatch,
     validate_summary_json,
 )
+from passagen.citations import CitationService
 from passagen.config import AssistantSettings, LlmSettings
 from passagen.domain import PaperStatus
 from passagen.parsing import ParsedPaper
@@ -44,6 +45,7 @@ from passagen_mcp.schemas import (
     CollectionReportView,
     CollectionSynthesisView,
     ContextPart,
+    PaperCitationResult,
     PaperContextResult,
     PaperListItem,
     PaperListResult,
@@ -75,10 +77,14 @@ class LibraryReader:
         data_dir: Path,
         llm_settings: LlmSettings | None = None,
         assistant_settings: AssistantSettings | None = None,
+        citation_timeout_seconds: float = 10.0,
     ) -> None:
         self.database_path = database_path.expanduser().resolve()
         self.data_dir = data_dir.expanduser().resolve()
         self.catalog = CatalogService(self.database_path, self.data_dir)
+        self.citations = CitationService(
+            self.database_path, timeout_seconds=citation_timeout_seconds
+        )
         llm = llm_settings or LlmSettings()
         self.syntheses = CollectionSynthesisService(
             self.database_path, self.data_dir, llm, assistant_settings
@@ -189,6 +195,20 @@ class LibraryReader:
         if ContextPart.NOTE in include:
             result.note = self.catalog.get_paper_note(paper_id)
         return result
+
+    def get_paper_citation(self, paper_id: str, *, refresh: bool = False) -> PaperCitationResult:
+        citation = self.citations.get_bibtex(paper_id, refresh=refresh)
+        return PaperCitationResult(
+            paper_id=citation.paper_id,
+            format=citation.format,
+            content=citation.content,
+            source=citation.source.value,
+            authoritative=citation.authoritative,
+            warnings=list(citation.warnings),
+            cached=citation.cached,
+            updated_at=citation.updated_at,
+            remote_checked_at=citation.remote_checked_at,
+        )
 
     def list_tags(self) -> TagListResult:
         return TagListResult(

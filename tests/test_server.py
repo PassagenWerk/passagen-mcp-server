@@ -23,6 +23,7 @@ async def test_tools_return_structured_content(library: LibraryReader) -> None:
     assert names == {
         "list_papers",
         "get_paper_context",
+        "get_paper_citation",
         "search_paper_sections",
         "list_collections",
         "list_tags",
@@ -31,9 +32,28 @@ async def test_tools_return_structured_content(library: LibraryReader) -> None:
         "get_collection_report",
     }
     assert all(tool.annotations and tool.annotations.read_only_hint for tool in listed.tools)
+    citation_tool = next(tool for tool in listed.tools if tool.name == "get_paper_citation")
+    assert citation_tool.annotations is not None
+    assert citation_tool.annotations.open_world_hint is True
     assert result.is_error is False
     assert result.structured_content is not None
     assert result.structured_content["items"][0]["id"] == "paper-a"
+
+
+@pytest.mark.anyio
+async def test_citation_tool_returns_persisted_bibtex(library: LibraryReader) -> None:
+    server = create_server(library)
+    async with Client(server, raise_exceptions=True) as client:
+        generated = await client.call_tool("get_paper_citation", {"paper_id": "paper-a"})
+        cached = await client.call_tool("get_paper_citation", {"paper_id": "paper-a"})
+
+    assert generated.is_error is False
+    assert generated.structured_content is not None
+    assert generated.structured_content["format"] == "bibtex"
+    assert generated.structured_content["content"].startswith("@misc{")
+    assert generated.structured_content["cached"] is False
+    assert cached.structured_content is not None
+    assert cached.structured_content["cached"] is True
 
 
 @pytest.mark.anyio

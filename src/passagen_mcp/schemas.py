@@ -111,6 +111,19 @@ class PaperContextResult(BaseModel):
     unavailable: list[UnavailableContent] = Field(default_factory=list)
 
 
+class PaperCitationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    paper_id: str
+    format: str
+    content: str
+    source: str
+    authoritative: bool
+    warnings: list[str]
+    cached: bool
+    updated_at: str | None
+    remote_checked_at: str | None
+
+
 class TagItem(TagRef):
     color: str | None
     created_at: str

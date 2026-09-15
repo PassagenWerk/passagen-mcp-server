@@ -179,6 +179,7 @@ Tools：
 |---|---|
 | `list_papers` | 筛选、排序和分页列出紧凑论文元数据。 |
 | `get_paper_context` | 读取论文 metadata、组织关系及选定内容。 |
+| `get_paper_citation` | 获取并持久化 BibTeX；可按需强制刷新 DOI/local metadata。 |
 | `search_paper_sections` | 在限定 scope 中检索带页码的全文 section。 |
 | `list_tags` | 列出标签及论文使用数。 |
 | `list_collections` | 列出 collection 及论文数。 |

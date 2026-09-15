@@ -71,6 +71,24 @@ def test_context_projects_summary_and_reports_missing_content(library: LibraryRe
     }
 
 
+def test_paper_citation_is_materialized_then_read_from_cache(library: LibraryReader) -> None:
+    first = library.get_paper_citation("paper-a")
+    second = library.get_paper_citation("paper-a")
+    refreshed = library.get_paper_citation("paper-a", refresh=True)
+
+    assert first.paper_id == "paper-a"
+    assert first.format == "bibtex"
+    assert first.source == "local_metadata"
+    assert first.authoritative is False
+    assert first.content.startswith("@misc{author2024alphalatencysystem-")
+    assert first.cached is False
+    assert first.updated_at is not None
+    assert second.content == first.content
+    assert second.cached is True
+    assert refreshed.content == first.content
+    assert refreshed.cached is False
+
+
 def test_search_sections_is_scoped_ranked_and_page_linked(library: LibraryReader) -> None:
     result = library.search_sections("tail latency", paper_ids=["paper-a"])
 
