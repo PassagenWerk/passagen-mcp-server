@@ -1,7 +1,7 @@
 [project]
 name = "passagen-mcp-server"
 version = "0.1.0"
-description = "Read-only MCP access to Passagen paper libraries"
+description = "MCP access to Passagen paper libraries with optional collection organization"
 readme = "README.md"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE"]

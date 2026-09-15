@@ -5,6 +5,13 @@ All notable changes to Passagen MCP Server are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added opt-in tools to create collections and append existing papers, with write access disabled
+  by default and authenticated HTTP required when enabled.
+
 ## [0.1.0] - 2026-09-14
 
 Requires `passagen-core` `0.7.x` and Passagen Schema version 10.

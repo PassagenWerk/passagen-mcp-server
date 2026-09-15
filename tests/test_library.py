@@ -97,6 +97,33 @@ def test_collection_preserves_member_order(library: LibraryReader) -> None:
     assert [member.position for member in detail.papers] == [0, 1]
 
 
+def test_create_collection_and_add_existing_papers(library: LibraryReader) -> None:
+    created = library.create_collection("Distributed Systems", "Agent reading list")
+
+    assert created.name == "Distributed Systems"
+    assert created.description == "Agent reading list"
+    assert created.papers == []
+
+    updated = library.add_papers_to_collection(created.id, ["paper-c", "paper-a"])
+    retried = library.add_papers_to_collection(created.id, ["paper-a"])
+
+    assert [member.paper.id for member in updated.papers] == ["paper-c", "paper-a"]
+    assert [member.paper.id for member in retried.papers] == ["paper-c", "paper-a"]
+
+
+def test_add_papers_to_collection_validates_bounded_batch(library: LibraryReader) -> None:
+    collection = library.create_collection("Validation")
+
+    with pytest.raises(LibraryRequestError, match="at least one"):
+        library.add_papers_to_collection(collection.id, [])
+    with pytest.raises(LibraryRequestError, match="at most 100"):
+        library.add_papers_to_collection(collection.id, [f"paper-{index}" for index in range(101)])
+    with pytest.raises(CatalogNotFoundError, match="One or more papers"):
+        library.add_papers_to_collection(collection.id, ["paper-a", "missing"])
+
+    assert library.get_collection(collection.id).papers == []
+
+
 def test_collection_context_reads_safe_persisted_synthesis(library: LibraryReader) -> None:
     collection = library.list_collections().items[0]
     context = library.get_collection_context(collection.id)

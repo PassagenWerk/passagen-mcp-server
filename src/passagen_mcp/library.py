@@ -67,7 +67,7 @@ class LibraryRequestError(ValueError):
 
 
 class LibraryReader:
-    """Read-only, agent-oriented projection over a Passagen library."""
+    """Agent-oriented projection over a Passagen library."""
 
     def __init__(
         self,
@@ -210,6 +210,20 @@ class LibraryReader:
             collection = self.catalog.get_collection(item.id)
             items.append(self._collection_item(collection, len(collection.papers)))
         return CollectionListResult(items=items)
+
+    def create_collection(self, name: str, description: str | None = None) -> CollectionDetail:
+        collection = self.catalog.create_collection(name, description)
+        return self.get_collection(collection.id)
+
+    def add_papers_to_collection(
+        self, collection_id: str, paper_ids: Sequence[str]
+    ) -> CollectionDetail:
+        if not paper_ids:
+            raise LibraryRequestError("paper_ids must contain at least one paper ID")
+        if len(paper_ids) > 100:
+            raise LibraryRequestError("paper_ids must contain at most 100 paper IDs")
+        collection = self.catalog.add_collection_papers(collection_id, list(paper_ids))
+        return self.get_collection(collection.id)
 
     def get_collection(self, collection_id: str) -> CollectionDetail:
         collection = self.catalog.get_collection(collection_id)

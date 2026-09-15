@@ -58,6 +58,11 @@ def _library_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="explicit config file (default: <data-dir>/passagen.yaml)",
     )
+    parser.add_argument(
+        "--allow-write",
+        action="store_true",
+        help="allow creating collections and adding existing papers to them",
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -71,7 +76,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             settings.core.providers.llm,
             settings.core.assistant,
         )
-        mcp = create_server(library)
+        mcp = create_server(library, allow_write=args.allow_write)
         _configure_logging()
         if args.command == "stdio":
             mcp.run(transport="stdio")
@@ -81,6 +86,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             host=args.host,
             port=args.port,
             token=token,
+            allow_write=args.allow_write,
             allowed_hosts=tuple(args.allow_host),
             allowed_origins=tuple(args.allow_origin),
         )
@@ -88,10 +94,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     except (ConfigurationError, CatalogError) as exc:
         parser.error(str(exc))
     logging.getLogger("passagen_mcp").info(
-        "server_starting host=%s port=%s auth=%s",
+        "server_starting host=%s port=%s auth=%s collection_writes=%s",
         http.host,
         http.port,
         "enabled" if http.token is not None else "disabled",
+        "enabled" if http.allow_write else "disabled",
     )
     uvicorn.run(
         application,

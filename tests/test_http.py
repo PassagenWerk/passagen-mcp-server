@@ -22,6 +22,15 @@ def test_non_loopback_requires_token_and_host_allowlist() -> None:
         HttpSettings(host="0.0.0.0", token="secret")
 
 
+def test_collection_writes_require_token_even_on_loopback() -> None:
+    with pytest.raises(ConfigurationError, match="collection writes"):
+        HttpSettings(allow_write=True)
+
+    settings = HttpSettings(token="secret", allow_write=True)
+
+    assert settings.allow_write is True
+
+
 def test_health_is_public_but_mcp_requires_bearer(data_dir: Path) -> None:
     server = create_server(LibraryReader(data_dir / "passagen.db", data_dir))
     settings = HttpSettings(token="secret", allowed_hosts=("testserver",), allowed_origins=())

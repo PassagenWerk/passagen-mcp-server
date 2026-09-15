@@ -37,6 +37,44 @@ async def test_tools_return_structured_content(library: LibraryReader) -> None:
 
 
 @pytest.mark.anyio
+async def test_collection_write_tools_require_opt_in_and_return_updated_detail(
+    library: LibraryReader,
+) -> None:
+    read_only_server = create_server(library)
+    write_server = create_server(library, allow_write=True)
+
+    async with Client(read_only_server, raise_exceptions=True) as client:
+        read_only_tools = await client.list_tools()
+    async with Client(write_server, raise_exceptions=True) as client:
+        listed = await client.list_tools()
+        created = await client.call_tool(
+            "create_collection",
+            {"name": "Agent Queue", "description": "Selected through MCP"},
+        )
+        assert created.structured_content is not None
+        collection_id = created.structured_content["id"]
+        updated = await client.call_tool(
+            "add_papers_to_collection",
+            {"collection_id": collection_id, "paper_ids": ["paper-c", "paper-a"]},
+        )
+
+    assert "create_collection" not in {tool.name for tool in read_only_tools.tools}
+    tools = {tool.name: tool for tool in listed.tools}
+    assert set(tools) >= {"create_collection", "add_papers_to_collection"}
+    assert tools["create_collection"].annotations is not None
+    assert tools["create_collection"].annotations.read_only_hint is False
+    assert tools["create_collection"].annotations.destructive_hint is False
+    assert tools["create_collection"].annotations.idempotent_hint is False
+    assert tools["add_papers_to_collection"].annotations is not None
+    assert tools["add_papers_to_collection"].annotations.idempotent_hint is True
+    assert updated.structured_content is not None
+    assert [item["paper"]["id"] for item in updated.structured_content["papers"]] == [
+        "paper-c",
+        "paper-a",
+    ]
+
+
+@pytest.mark.anyio
 async def test_resources_read_validated_content(library: LibraryReader) -> None:
     server = create_server(library)
     async with Client(server, raise_exceptions=True) as client:

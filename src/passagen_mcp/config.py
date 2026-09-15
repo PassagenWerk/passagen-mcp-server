@@ -47,6 +47,7 @@ class HttpSettings:
     host: str = "127.0.0.1"
     port: int = 8766
     token: str | None = field(default=None, repr=False)
+    allow_write: bool = False
     allowed_hosts: tuple[str, ...] = ()
     allowed_origins: tuple[str, ...] = ()
 
@@ -55,6 +56,10 @@ class HttpSettings:
             raise ConfigurationError("Port must be between 1 and 65535")
         if self.token is not None and not self.token.strip():
             raise ConfigurationError("Bearer token must not be blank")
+        if self.allow_write and self.token is None:
+            raise ConfigurationError(
+                "A bearer token is required when collection writes are enabled"
+            )
         if any(not host.strip() or "/" in host for host in self.allowed_hosts):
             raise ConfigurationError("Allowed hosts must be Host header values, not URLs")
         for origin in self.allowed_origins:

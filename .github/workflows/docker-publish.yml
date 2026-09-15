@@ -62,7 +62,7 @@ jobs:
             type=raw,value=latest
           labels: |
             org.opencontainers.image.title=Passagen MCP Server
-            org.opencontainers.image.description=Read-only MCP access to Passagen paper libraries
+            org.opencontainers.image.description=MCP access to Passagen paper libraries
             org.opencontainers.image.licenses=AGPL-3.0-only
 
       - name: Build and push

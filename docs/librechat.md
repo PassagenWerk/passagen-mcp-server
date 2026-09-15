@@ -75,9 +75,13 @@ LibreChat 可以先使用 `list_tags`、`list_collections` 和 `list_papers` 缩
 research 可以通过 `get_collection_context`、`list_collection_reports` 和
 `get_collection_report` 读取。
 
-这些工具可与 LibreChat 中的网页搜索、代码执行、文件处理、规划和写作工具组合。Passagen 仅
-作为只读、可引用的研究来源，不启动 synthesis/report generation，也不调用 LLM。响应包含
+这些工具可与 LibreChat 中的网页搜索、代码执行、文件处理、规划和写作工具组合。Passagen
+默认作为只读、可引用的研究来源，不启动 synthesis/report generation，也不调用 LLM。响应包含
 source-staleness reasons 和安全 artifact metadata，但不暴露受管路径或内部错误详情。
+
+如需允许 LibreChat 创建 collection 和追加已有论文，在容器 command 中加入 `--allow-write`，
+并将 data volume 改为读写挂载。该模式仍然要求 Bearer token，且不提供论文导入、删除、重排或
+research generation 能力。
 
 ## Host Deployment
 
