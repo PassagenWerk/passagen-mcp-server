@@ -12,6 +12,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added opt-in tools to create collections and append existing papers, with write access disabled
   by default and authenticated HTTP required when enabled.
 
+### Changed
+
+- Updated shared database compatibility to Passagen Schema version 11.
+
 ## [0.1.0] - 2026-09-14
 
 Requires `passagen-core` `0.7.x` and Passagen Schema version 10.
