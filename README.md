@@ -142,7 +142,7 @@ docker run --rm \
   -p 127.0.0.1:8766:8766 \
   -e PASSAGEN_MCP_TOKEN="$PASSAGEN_MCP_TOKEN" \
   -v /absolute/path/to/passagen-library:/data:ro \
-  docker.io/sycstudio/passagen-mcp-server:0.1.0 \
+  docker.io/sycstudio/passagen-mcp-server:0.2.0 \
   passagen-mcp serve \
   --data-dir /data \
   --host 0.0.0.0 \

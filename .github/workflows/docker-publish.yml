@@ -7,18 +7,18 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing MCP Server tag to publish (for example, v0.1.0)
+        description: Existing MCP Server tag to publish (for example, v0.2.0)
         required: true
         type: string
       core_ref:
         description: Compatible Passagen Core tag
         required: true
-        default: v0.7.1
+        default: v0.8.0
         type: string
 
 env:
   RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
-  CORE_REF: ${{ inputs.core_ref || 'v0.7.1' }}
+  CORE_REF: ${{ inputs.core_ref || 'v0.8.0' }}
 
 permissions:
   contents: read

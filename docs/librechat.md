@@ -8,7 +8,7 @@ LibreChat 推荐通过 Streamable HTTP 连接 Passagen MCP Server。`stdio` 仅�
 直接使用发布镜像，或从本仓库和相邻 Core checkout 构建：
 
 ```bash
-docker pull docker.io/sycstudio/passagen-mcp-server:0.1.0
+docker pull docker.io/sycstudio/passagen-mcp-server:0.2.0
 ```
 
 ```bash
@@ -24,7 +24,7 @@ docker build \
 ```yaml
 services:
   passagen-mcp:
-    image: docker.io/sycstudio/passagen-mcp-server:0.1.0
+    image: docker.io/sycstudio/passagen-mcp-server:0.2.0
     restart: unless-stopped
     environment:
       PASSAGEN_MCP_TOKEN: ${PASSAGEN_MCP_TOKEN:?set PASSAGEN_MCP_TOKEN}
