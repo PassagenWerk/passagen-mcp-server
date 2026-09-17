@@ -5,6 +5,20 @@ All notable changes to Passagen MCP Server are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-17
+
+Requires `passagen-core` `0.9.x` and Passagen Schema version 13.
+
+### Added
+
+- Added GitLab CI for linting, type checking, tests, coverage reports, tag-version validation, and
+  isolated wheel installation.
+- Added a Chinese Docker Hub overview and automatic overview synchronization after image pushes.
+
+### Fixed
+
+- Updated Docker Hub overview publishing to the Node 24-compatible description action.
+
 ## [0.3.0] - 2026-09-17
 
 Requires `passagen-core` `0.9.x` and Passagen Schema version 13.

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing MCP Server tag to publish (for example, v0.3.0)
+        description: Existing MCP Server tag to publish (for example, v0.3.1)
         required: true
         type: string
       core_ref:

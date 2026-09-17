@@ -17,7 +17,7 @@ docker run --rm \
   -p 127.0.0.1:8766:8766 \
   -e PASSAGEN_MCP_TOKEN="$PASSAGEN_MCP_TOKEN" \
   -v /absolute/path/to/passagen-library:/data:ro \
-  docker.io/sycstudio/passagen-mcp-server:0.3.0 \
+  docker.io/sycstudio/passagen-mcp-server:0.3.1 \
   passagen-mcp serve \
   --data-dir /data \
   --host 0.0.0.0 \
@@ -41,7 +41,7 @@ token。不要为不可信客户端启用写入。
 
 ## 镜像标签
 
-- `0.3.0`：固定版本
+- `0.3.1`：固定版本
 - `0.3`：当前 `0.3` 系列版本
 - `latest`：最新稳定版本
 
