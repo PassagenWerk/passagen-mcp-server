@@ -267,10 +267,6 @@ docker build \
   -t passagen-mcp-server:local .
 ```
 
-GitHub Docker 发布 workflow 使用 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 推送镜像并更新
-Docker Hub Overview。该用户必须对 `sycstudio/passagen-mcp-server` 具有 Admin 权限，token
-必须具有 `read/write/delete` scope；仅有镜像写权限时，description 更新会返回 `Forbidden`。
-
 ## 许可证
 
 [GNU Affero General Public License v3.0](LICENSE)，SPDX 标识为 `AGPL-3.0-only`。
