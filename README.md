@@ -33,7 +33,7 @@ MCP Server 读取由以下入口维护的同一个 data directory：
 - [Passagen Core](https://github.com/PassagenWerk/passagen-core)：三者共享的数据模型、artifact
   校验和查询逻辑。
 
-MCP Server 不初始化或迁移数据库。首次使用前，先通过 Web 或 CLI 创建并处理论文库。MCP
+MCP Server 不初始化或迁移数据库。首次使用前，先通过 Web 或 CLI 创建并处理论文库。
 MCP Server `0.3.x` 需要 Passagen Core `0.9.x` 和 Schema version 13；升级时应保持 Web、CLI、
 Core 和 MCP Server 的兼容 release line。
 
