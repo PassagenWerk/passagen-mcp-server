@@ -1,0 +1,75 @@
+stages:
+  - lint
+  - test
+  - build
+
+variables:
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.uv-cache"
+  UV_NO_SYNC: "1"
+
+cache:
+  key: python-${CI_COMMIT_REF_SLUG}
+  paths:
+    - .uv-cache/
+
+before_script:
+  - apt-get update && apt-get install -y --no-install-recommends git
+  - mkdir -p .ci
+  - git clone --depth 1 "${CI_SERVER_PROTOCOL}://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/${CI_PROJECT_NAMESPACE}/passagen-core.git" .ci/passagen-core
+  - uv sync --frozen --no-install-package passagen-core
+  - uv pip install --no-deps .ci/passagen-core
+
+ruff:
+  stage: lint
+  script:
+    - uv run ruff check .
+    - uv run ruff format --check .
+
+basedpyright:
+  stage: lint
+  script:
+    - uv run basedpyright
+
+mypy:
+  stage: lint
+  script:
+    - uv run mypy
+
+pytest:
+  stage: test
+  script:
+    - mkdir -p reports/pytest reports/coverage
+    - >
+      uv run pytest
+      -o addopts=""
+      --import-mode=importlib
+      --cov=passagen_mcp
+      --cov-report=term-missing
+      --cov-report=xml:reports/coverage/coverage.xml
+      --junitxml=reports/pytest/junit.xml
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    when: always
+    reports:
+      junit: reports/pytest/junit.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: reports/coverage/coverage.xml
+    paths:
+      - reports/pytest/junit.xml
+      - reports/coverage/coverage.xml
+
+build-package:
+  stage: build
+  script:
+    - test "v$(uv run passagen-mcp --version)" = "$CI_COMMIT_TAG"
+    - uv build
+    - uv venv .ci/wheel-venv
+    - uv pip install --python .ci/wheel-venv/bin/python .ci/passagen-core ./dist/passagen_mcp_server-*.whl
+    - .ci/wheel-venv/bin/passagen-mcp --version
+  artifacts:
+    expire_in: never
+    paths:
+      - dist/
+  rules:
+    - if: $CI_COMMIT_TAG
