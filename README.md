@@ -6,17 +6,19 @@
 及其他兼容 MCP 的工具都可以通过统一接口调用 Passagen 数据，让 Agent 先发现论文和
 collection，再按范围读取摘要、全文 evidence、synthesis 与 research report。
 
-服务默认只读；显式启用 collection 写能力后，可以创建 collection，并把库中已有论文添加进去。
-它不会导入或修改论文，不会启动 processing、synthesis 或 report generation，也不会在读取时
-调用 LLM。论文正文和生成内容始终被视为不可信研究数据，而不是 Agent 指令。
+服务默认只读；显式启用写能力后，可以维护 collection 和 tag、批量调整论文标签，并保存
+collection Markdown 文档。它不会导入或删除论文，不会启动 processing、synthesis 或 report
+generation，也不会在读取时调用 LLM。论文正文和生成内容始终被视为不可信研究数据，而不是
+Agent 指令。
 
 ## 能力
 
-- 按标题、状态、标签、venue、年份和 collection 筛选、排序和分页浏览论文。
+- 按标题、状态、标签、venue、年份和 collection 筛选、排序和分页浏览论文，并按字段投影结果。
+- 批量读取论文，或按 ID、规范化标题、DOI 和 arXiv ID 解析论文。
 - 读取经过校验的 Author/Cleaned Abstract、Structured Summary、Outline 和用户笔记。
 - 在限定论文或 collection 范围内检索全文 section，返回页码、excerpt 和 artifact hash。
 - 浏览标签、有序 collection、最新 collection synthesis 和已有 research report。
-- 可选地创建 collection，并按顺序追加库中已有论文。
+- 可选地创建和更新 collection、逐项校验成员添加、维护 tag 和批量调整论文标签。
 - 返回 citation、coverage 和 stale-source 状态，不暴露受管理 artifact 的文件系统路径。
 - 通过本地 `stdio` 或带 Bearer 认证的 Streamable HTTP `/mcp` 提供同一组能力。
 
@@ -32,8 +34,8 @@ MCP Server 读取由以下入口维护的同一个 data directory：
   校验和查询逻辑。
 
 MCP Server 不初始化或迁移数据库。首次使用前，先通过 Web 或 CLI 创建并处理论文库。MCP
-Server `0.1.x` 需要 Passagen Core `0.7.x`；升级时应保持 Web、CLI、Core 和 MCP Server 的
-minor 版本兼容。
+MCP Server `0.3.x` 需要 Passagen Core `0.9.x` 和 Schema version 13；升级时应保持 Web、CLI、
+Core 和 MCP Server 的兼容 release line。
 
 ## 快速开始
 
@@ -130,8 +132,9 @@ passagen-mcp serve \
   --allow-write
 ```
 
-写能力只允许创建 collection 和向其中追加已有 `paper_id`，不会导入论文、修改论文内容或生成
-研究产物。建议 Agent 在写入前向用户确认 collection 名称和 paper IDs。
+写能力只维护 collection、tag、论文的 tag 关联和外部 Markdown 文档，不会导入或删除论文、
+修改 PDF/生成内容或生成研究产物。建议 Agent 在写入前确认 collection、tag 和 paper IDs，并在
+批量写入前优先使用 `dry_run=true`。
 
 ### Docker
 
@@ -142,7 +145,7 @@ docker run --rm \
   -p 127.0.0.1:8766:8766 \
   -e PASSAGEN_MCP_TOKEN="$PASSAGEN_MCP_TOKEN" \
   -v /absolute/path/to/passagen-library:/data:ro \
-  docker.io/sycstudio/passagen-mcp-server:0.2.0 \
+  docker.io/sycstudio/passagen-mcp-server:0.3.0 \
   passagen-mcp serve \
   --data-dir /data \
   --host 0.0.0.0 \
@@ -166,6 +169,11 @@ docker run --rm \
 4. 需要已有研究产物时，使用 `list_collection_reports` 和 `get_collection_report`。
 5. 根据响应中的 citation、page 和 artifact hash 验证最终结论。
 
+所有列表使用显式 `offset` 和 `limit`，并返回 `returned`、`total`、`next_offset` 和
+`has_more`。`list_papers` 默认只返回 `id`、`title`、`year` 和 `tags`；需要作者、collection、
+artifact 状态或资源 URI 时，通过 `fields` 明确请求。调用方可以改变 `limit` 后从任意 offset
+继续，不需要保存与过滤条件绑定的游标。
+
 `search_paper_sections` 是 bounded English lexical search。单次 scope 最多 100 篇论文，显式
 `paper_ids` 最多 50 个；更大的库应按 collection 或 paper ID 批次检索。该边界使 MCP Server
 能够安全嵌入包含网页搜索、代码执行、写作、任务规划等其他工具的 Agent 工作流，而不让一次
@@ -178,16 +186,25 @@ Tools：
 | Tool | 用途 |
 |---|---|
 | `list_papers` | 筛选、排序和分页列出紧凑论文元数据。 |
+| `get_papers` | 按 ID 批量读取可选字段，并单独返回未命中的 ID。 |
+| `resolve_papers` | 按 ID、标题、DOI 或 arXiv ID 批量解析论文。 |
 | `get_paper_context` | 读取论文 metadata、组织关系及选定内容。 |
 | `get_paper_citation` | 获取并持久化 BibTeX；可按需强制刷新 DOI/local metadata。 |
 | `search_paper_sections` | 在限定 scope 中检索带页码的全文 section。 |
 | `list_tags` | 列出标签及论文使用数。 |
 | `list_collections` | 列出 collection 及论文数。 |
-| `get_collection_context` | 读取有序论文和最新 persisted synthesis。 |
+| `get_collection_context` | 按需分页读取有序论文和最新 persisted synthesis。 |
 | `list_collection_reports` | 列出已有 report 及 lifecycle/stale 状态。 |
 | `get_collection_report` | 读取一个已有 report、citation 和安全 artifact metadata。 |
 | `create_collection` | 创建空 collection；仅在 `--allow-write` 模式提供。 |
-| `add_papers_to_collection` | 按顺序追加最多 100 篇已有论文；仅在 `--allow-write` 模式提供。 |
+| `update_collection` | 更新 collection 名称或 description；仅在 `--allow-write` 模式提供。 |
+| `add_papers_to_collection` | 逐项校验并追加最多 100 篇论文，支持 dry-run/atomic；仅在写模式提供。 |
+| `create_tag` | 创建 tag；仅在 `--allow-write` 模式提供。 |
+| `update_tag` | 修改 tag 名称或颜色；仅在 `--allow-write` 模式提供。 |
+| `update_paper_tags` | 批量添加或移除论文 tag，支持 dry-run；仅在写模式提供。 |
+| `list_collection_documents` | 分页列出手工与生成型文档；paper 快照和成员差异按需返回。 |
+| `get_collection_document` | 读取一个手工或已完成的生成型 collection 文档。 |
+| `create_collection_document` | 添加 Markdown 文档；仅在 `--allow-write` 模式提供，可用 `external_id` 安全重试。 |
 
 Resource templates：
 
@@ -200,6 +217,7 @@ passagen://papers/{paper_id}/sections/{ordinal}
 passagen://collections/{collection_id}
 passagen://collections/{collection_id}/synthesis
 passagen://collections/{collection_id}/reports/{report_id}
+passagen://collections/{collection_id}/documents/{document_id}
 ```
 
 Collection 没有 synthesis/report 时会返回明确的 unavailable/空列表状态，而不会隐式生成内容。

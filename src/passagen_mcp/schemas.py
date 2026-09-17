@@ -24,6 +24,35 @@ class SummarySection(StrEnum):
     RELATED_WORK = "related_work"
 
 
+class PaperField(StrEnum):
+    ID = "id"
+    TITLE = "title"
+    AUTHORS = "authors"
+    YEAR = "year"
+    VENUE = "venue"
+    DOI = "doi"
+    ARXIV_ID = "arxiv_id"
+    STATUS = "status"
+    TAGS = "tags"
+    COLLECTIONS = "collections"
+    ARTIFACTS = "artifacts"
+    UPDATED_AT = "updated_at"
+    RESOURCE_URI = "resource_uri"
+
+
+class TagField(StrEnum):
+    ID = "id"
+    NAME = "name"
+    COLOR = "color"
+    CREATED_AT = "created_at"
+    PAPER_COUNT = "paper_count"
+
+
+class CollectionDocumentInclude(StrEnum):
+    PAPERS = "papers"
+    PAPER_CHANGES = "paper_changes"
+
+
 class TagRef(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
@@ -83,9 +112,32 @@ class PaperListItem(BaseModel):
 
 class PaperListResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    items: list[PaperListItem]
+    offset: int
+    limit: int
+    returned: int
     total: int
-    next_cursor: str | None
+    next_offset: int | None
+    has_more: bool
+    items: list[dict[str, Any]]
+
+
+class PaperBatchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[dict[str, Any]]
+    not_found: list[str]
+
+
+class PaperResolutionItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input: str
+    kind: str
+    status: str
+    matches: list[dict[str, Any]]
+
+
+class PaperResolutionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    results: list[PaperResolutionItem]
 
 
 class AbstractContent(BaseModel):
@@ -132,7 +184,13 @@ class TagItem(TagRef):
 
 class TagListResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    items: list[TagItem]
+    offset: int
+    limit: int
+    returned: int
+    total: int
+    next_offset: int | None
+    has_more: bool
+    items: list[dict[str, Any]]
 
 
 class CollectionItem(CollectionRef):
@@ -145,6 +203,12 @@ class CollectionItem(CollectionRef):
 
 class CollectionListResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    offset: int
+    limit: int
+    returned: int
+    total: int
+    next_offset: int | None
+    has_more: bool
     items: list[CollectionItem]
 
 
@@ -158,6 +222,53 @@ class CollectionMember(BaseModel):
 
 class CollectionDetail(CollectionItem):
     papers: list[CollectionMember]
+
+
+class CollectionDocumentPaper(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    title: str | None
+
+
+class CollectionDocumentPaperChanges(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    added: list[CollectionDocumentPaper]
+    removed: list[CollectionDocumentPaper]
+    order_changed: bool
+
+
+class CollectionDocumentItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    collection_id: str
+    title: str
+    document_type: str
+    kind: str
+    status: str
+    editable: bool
+    source: str
+    external_id: str | None
+    revision: int | None
+    papers: list[CollectionDocumentPaper]
+    paper_changes: CollectionDocumentPaperChanges
+    created_at: str
+    updated_at: str
+    resource_uri: str
+
+
+class CollectionDocumentListResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    offset: int
+    limit: int
+    returned: int
+    total: int
+    next_offset: int | None
+    has_more: bool
+    items: list[dict[str, Any]]
+
+
+class CollectionDocumentView(CollectionDocumentItem):
+    markdown: str | None
 
 
 class SourceStatusView(BaseModel):
@@ -189,9 +300,43 @@ class CollectionSynthesisView(BaseModel):
 class CollectionContextResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     collection: CollectionItem
-    papers: list[CollectionMember] | None = None
+    papers: PaperListResult | None = None
     synthesis: CollectionSynthesisView | None = None
     unavailable: list[UnavailableContent] = Field(default_factory=list)
+
+
+class CollectionPaperMutationItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    paper_id: str
+    status: str
+    reason: str | None = None
+
+
+class CollectionPaperMutationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dry_run: bool
+    atomic: bool
+    affected: int
+    skipped: int
+    collection_total: int
+    results: list[CollectionPaperMutationItem]
+
+
+class PaperTagMutationItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    paper_id: str
+    status: str
+    tags_added: list[str]
+    tags_removed: list[str]
+    reason: str | None = None
+
+
+class PaperTagMutationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dry_run: bool
+    affected: int
+    skipped: int
+    results: list[PaperTagMutationItem]
 
 
 class CollectionReportItem(BaseModel):

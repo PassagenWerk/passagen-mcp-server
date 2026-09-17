@@ -4,44 +4,65 @@ import pytest
 from passagen.catalog import CatalogNotFoundError, PaperSort, SortDirection, TagMatch
 
 from passagen_mcp.library import LibraryReader, LibraryRequestError
-from passagen_mcp.schemas import ContextPart, SummarySection
+from passagen_mcp.schemas import (
+    CollectionDocumentInclude,
+    ContextPart,
+    PaperField,
+    SummarySection,
+)
 
 
 def test_list_papers_filters_expands_references_and_paginates(library: LibraryReader) -> None:
-    systems = next(tag for tag in library.list_tags().items if tag.name == "Systems")
+    systems = next(tag for tag in library.list_tags().items if tag["name"] == "Systems")
+    fields = [
+        PaperField.ID,
+        PaperField.TITLE,
+        PaperField.YEAR,
+        PaperField.TAGS,
+        PaperField.COLLECTIONS,
+        PaperField.ARTIFACTS,
+    ]
 
     first = library.list_papers(
         title_query="a",
-        tag_ids=[systems.id],
+        tag_ids=[str(systems["id"])],
         tag_match=TagMatch.ALL,
         sort=PaperSort.YEAR,
         direction=SortDirection.DESC,
-        page_size=1,
+        fields=fields,
+        limit=1,
     )
     second = library.list_papers(
         title_query="a",
-        tag_ids=[systems.id],
+        tag_ids=[str(systems["id"])],
         tag_match=TagMatch.ALL,
         sort=PaperSort.YEAR,
         direction=SortDirection.DESC,
-        page_size=1,
-        cursor=first.next_cursor,
+        fields=fields,
+        offset=first.next_offset or 0,
+        limit=2,
     )
 
     assert first.total == 2
-    assert first.items[0].id == "paper-a"
-    assert {tag.name for tag in first.items[0].tags} == {"Systems", "Priority"}
-    assert first.items[0].collections[0].name == "Reading Queue"
-    assert first.items[0].artifacts.summary is True
-    assert second.items[0].id == "paper-b"
-    assert second.next_cursor is None
+    assert first.items[0]["id"] == "paper-a"
+    assert {tag["name"] for tag in first.items[0]["tags"]} == {"Systems", "Priority"}
+    assert first.items[0]["collections"][0]["name"] == "Reading Queue"
+    assert first.items[0]["artifacts"]["summary"] is True
+    assert second.items[0]["id"] == "paper-b"
+    assert second.next_offset is None
 
 
-def test_cursor_is_bound_to_filters(library: LibraryReader) -> None:
-    first = library.list_papers(page_size=1)
+def test_offset_can_be_resumed_with_a_different_limit(library: LibraryReader) -> None:
+    first = library.list_papers(limit=1)
+    second = library.list_papers(offset=first.next_offset or 0, limit=2)
 
-    with pytest.raises(LibraryRequestError, match="Invalid cursor"):
-        library.list_papers(title_query="Alpha", page_size=1, cursor=first.next_cursor)
+    assert first.returned == 1
+    assert second.returned == 2
+    assert {item["id"] for item in [*first.items, *second.items]} == {
+        "paper-a",
+        "paper-b",
+        "paper-c",
+    }
 
 
 def test_unknown_tag_and_collection_are_errors(library: LibraryReader) -> None:
@@ -49,6 +70,46 @@ def test_unknown_tag_and_collection_are_errors(library: LibraryReader) -> None:
         library.list_papers(tag_ids=["missing"])
     with pytest.raises(Exception, match="Collection not found"):
         library.list_papers(collection_id="missing")
+
+
+def test_projected_batch_read_and_identifier_resolution(library: LibraryReader) -> None:
+    batch = library.get_papers(
+        ["paper-c", "missing", "paper-a"], fields=[PaperField.ID, PaperField.TITLE]
+    )
+    resolved = library.resolve_papers(
+        ids=["paper-a", "missing"],
+        titles=["  alpha LATENCY system  "],
+    )
+
+    assert batch.items == [
+        {"id": "paper-c", "title": "Gamma Network"},
+        {"id": "paper-a", "title": "Alpha Latency System"},
+    ]
+    assert batch.not_found == ["missing"]
+    assert [item.status for item in resolved.results] == ["matched", "not_found", "matched"]
+    assert resolved.results[2].matches[0]["id"] == "paper-a"
+
+
+def test_tag_and_collection_updates_support_dry_run_and_partial_results(
+    library: LibraryReader,
+) -> None:
+    tag = library.create_tag("Programmable Network")
+    collection = library.create_collection("Draft", "Old description")
+
+    preview = library.update_paper_tags(["paper-a", "missing"], tags_add=[tag.id], dry_run=True)
+    assert tag.id not in library.catalog.get_paper("paper-a").tag_ids
+    applied = library.update_paper_tags(["paper-a", "missing"], tags_add=[tag.id])
+    renamed = library.update_tag(tag.id, name="Programmable Networks")
+    updated_collection = library.update_collection(
+        collection.id, name="Curated", clear_description=True
+    )
+
+    assert [item.status for item in preview.results] == ["would_update", "not_found"]
+    assert [item.status for item in applied.results] == ["updated", "not_found"]
+    assert tag.id in library.catalog.get_paper("paper-a").tag_ids
+    assert renamed.name == "Programmable Networks"
+    assert updated_collection.name == "Curated"
+    assert updated_collection.description is None
 
 
 def test_context_projects_summary_and_reports_missing_content(library: LibraryReader) -> None:
@@ -125,8 +186,53 @@ def test_create_collection_and_add_existing_papers(library: LibraryReader) -> No
     updated = library.add_papers_to_collection(created.id, ["paper-c", "paper-a"])
     retried = library.add_papers_to_collection(created.id, ["paper-a"])
 
-    assert [member.paper.id for member in updated.papers] == ["paper-c", "paper-a"]
-    assert [member.paper.id for member in retried.papers] == ["paper-c", "paper-a"]
+    assert updated.affected == 2
+    assert [item.status for item in updated.results] == ["added", "added"]
+    assert retried.affected == 0
+    assert retried.results[0].status == "already_present"
+    assert library.get_collection(created.id).paper_count == 2
+
+
+def test_collection_markdown_documents_can_be_created_listed_and_read(
+    library: LibraryReader,
+) -> None:
+    collection = library.create_collection("External documents")
+    library.add_papers_to_collection(collection.id, ["paper-a"])
+
+    created = library.create_collection_document(
+        collection.id,
+        title="Service brief",
+        markdown="# Brief\n\nImported content.",
+        external_id="service-42",
+    )
+    retried = library.create_collection_document(
+        collection.id,
+        title="Service brief",
+        markdown="# Brief\n\nImported content.",
+        external_id="service-42",
+    )
+    library.catalog.remove_collection_paper(collection.id, "paper-a")
+    library.add_papers_to_collection(collection.id, ["paper-b"])
+    listed = library.list_collection_documents(
+        collection.id,
+        include=[CollectionDocumentInclude.PAPERS, CollectionDocumentInclude.PAPER_CHANGES],
+    )
+    compact = library.list_collection_documents(collection.id)
+    detail = library.get_collection_document(collection.id, created.id)
+
+    assert retried.id == created.id
+    listed_item = next(item for item in listed.items if item["id"] == created.id)
+    assert listed_item["title"] == "Service brief"
+    assert {item["document_type"] for item in listed.items} == {"manual"}
+    assert "papers" not in compact.items[0]
+    assert "paper_changes" not in compact.items[0]
+    assert detail.markdown == "# Brief\n\nImported content."
+    assert detail.resource_uri.endswith(f"/documents/{created.id}")
+    assert [(paper.id, paper.title) for paper in detail.papers] == [
+        ("paper-a", "Alpha Latency System")
+    ]
+    assert [paper.id for paper in detail.paper_changes.added] == ["paper-b"]
+    assert [paper.id for paper in detail.paper_changes.removed] == ["paper-a"]
 
 
 def test_add_papers_to_collection_validates_bounded_batch(library: LibraryReader) -> None:
@@ -136,17 +242,28 @@ def test_add_papers_to_collection_validates_bounded_batch(library: LibraryReader
         library.add_papers_to_collection(collection.id, [])
     with pytest.raises(LibraryRequestError, match="at most 100"):
         library.add_papers_to_collection(collection.id, [f"paper-{index}" for index in range(101)])
-    with pytest.raises(CatalogNotFoundError, match="One or more papers"):
-        library.add_papers_to_collection(collection.id, ["paper-a", "missing"])
+    preview = library.add_papers_to_collection(collection.id, ["paper-a", "missing"], dry_run=True)
+    atomic = library.add_papers_to_collection(collection.id, ["paper-a", "missing"], atomic=True)
 
+    assert preview.affected == 1
+    assert preview.collection_total == 1
     assert library.get_collection(collection.id).papers == []
+    assert atomic.affected == 0
+    assert [item.status for item in atomic.results] == ["skipped", "not_found"]
+    result = library.add_papers_to_collection(collection.id, ["paper-a", "missing"])
+
+    assert result.affected == 1
+    assert [item.status for item in result.results] == ["added", "not_found"]
+    assert [item.paper.id for item in library.get_collection(collection.id).papers] == ["paper-a"]
 
 
 def test_collection_context_reads_safe_persisted_synthesis(library: LibraryReader) -> None:
     collection = library.list_collections().items[0]
-    context = library.get_collection_context(collection.id)
+    context = library.get_collection_context(collection.id, include_papers=True, paper_limit=1)
 
     assert context.papers is not None
+    assert context.papers.returned == 1
+    assert context.papers.items[0]["paper"]["id"] == "paper-b"
     assert context.synthesis is not None
     assert context.synthesis.synthesis["executive_overview"] == (
         "The collection studies system latency."

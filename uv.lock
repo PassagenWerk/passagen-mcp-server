@@ -851,7 +851,7 @@ wheels = [
 
 [[package]]
 name = "passagen-core"
-version = "0.8.0"
+version = "0.9.0"
 source = { editable = "../passagen-core" }
 dependencies = [
     { name = "alembic" },
@@ -887,7 +887,7 @@ dev = [
 
 [[package]]
 name = "passagen-mcp-server"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },

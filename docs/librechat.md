@@ -8,7 +8,7 @@ LibreChat 推荐通过 Streamable HTTP 连接 Passagen MCP Server。`stdio` 仅�
 直接使用发布镜像，或从本仓库和相邻 Core checkout 构建：
 
 ```bash
-docker pull docker.io/sycstudio/passagen-mcp-server:0.2.0
+docker pull docker.io/sycstudio/passagen-mcp-server:0.3.0
 ```
 
 ```bash
@@ -24,7 +24,7 @@ docker build \
 ```yaml
 services:
   passagen-mcp:
-    image: docker.io/sycstudio/passagen-mcp-server:0.2.0
+    image: docker.io/sycstudio/passagen-mcp-server:0.3.0
     restart: unless-stopped
     environment:
       PASSAGEN_MCP_TOKEN: ${PASSAGEN_MCP_TOKEN:?set PASSAGEN_MCP_TOKEN}
@@ -70,8 +70,9 @@ LibreChat。Bearer token 必须以同一个环境变量注入两个容器，不�
 
 ## Agent 工作流
 
-LibreChat 可以先使用 `list_tags`、`list_collections` 和 `list_papers` 缩小研究范围，再用
-`get_paper_context`、`search_paper_sections` 获取结构化上下文和带页码 evidence。已有 collection
+LibreChat 可以先使用 `list_tags`、`list_collections` 和带 fields/offset/limit 的 `list_papers`
+缩小研究范围，再用 `get_papers`、`resolve_papers`、`get_paper_context`、
+`search_paper_sections` 获取结构化上下文和带页码 evidence。已有 collection
 research 可以通过 `get_collection_context`、`list_collection_reports` 和
 `get_collection_report` 读取。
 
@@ -79,9 +80,9 @@ research 可以通过 `get_collection_context`、`list_collection_reports` 和
 默认作为只读、可引用的研究来源，不启动 synthesis/report generation，也不调用 LLM。响应包含
 source-staleness reasons 和安全 artifact metadata，但不暴露受管路径或内部错误详情。
 
-如需允许 LibreChat 创建 collection 和追加已有论文，在容器 command 中加入 `--allow-write`，
-并将 data volume 改为读写挂载。该模式仍然要求 Bearer token，且不提供论文导入、删除、重排或
-research generation 能力。
+如需允许 LibreChat 更新 collection、tag、paper-tag 或 Markdown document，在容器 command 中
+加入 `--allow-write`，并将 data volume 改为读写挂载。批量写入前优先使用 `dry_run=true`。
+该模式仍然要求 Bearer token，且不提供论文导入、删除、重排或 research generation 能力。
 
 ## Host Deployment
 

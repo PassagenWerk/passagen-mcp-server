@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import base64
 import hashlib
-import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from passagen.assistant.retrieval import InMemorySectionRetrieval, RetrievedSection
+from passagen.assistant.schemas import SourceSnapshot
 from passagen.catalog import (
     CatalogNotFoundError,
     CatalogService,
@@ -23,7 +22,11 @@ from passagen.citations import CitationService
 from passagen.config import AssistantSettings, LlmSettings
 from passagen.domain import PaperStatus
 from passagen.parsing import ParsedPaper
-from passagen.research import CollectionReportService, CollectionSynthesisService
+from passagen.research import (
+    CollectionReportService,
+    CollectionSynthesisService,
+    render_report_markdown,
+)
 from passagen.research.schemas import CollectionArtifact
 from passagen.research.schemas import CollectionReportView as CoreReportView
 from passagen.stages.abstract_fixing import load_cleaned_abstract
@@ -36,24 +39,39 @@ from passagen_mcp.schemas import (
     CollectionArtifactRef,
     CollectionContextResult,
     CollectionDetail,
+    CollectionDocumentInclude,
+    CollectionDocumentItem,
+    CollectionDocumentListResult,
+    CollectionDocumentPaper,
+    CollectionDocumentPaperChanges,
+    CollectionDocumentView,
     CollectionItem,
     CollectionListResult,
     CollectionMember,
+    CollectionPaperMutationItem,
+    CollectionPaperMutationResult,
     CollectionRef,
     CollectionReportItem,
     CollectionReportListResult,
     CollectionReportView,
     CollectionSynthesisView,
     ContextPart,
+    PaperBatchResult,
     PaperCitationResult,
     PaperContextResult,
+    PaperField,
     PaperListItem,
     PaperListResult,
     PaperMetadata,
+    PaperResolutionItem,
+    PaperResolutionResult,
+    PaperTagMutationItem,
+    PaperTagMutationResult,
     SectionHit,
     SectionSearchResult,
     SourceStatusView,
     SummarySection,
+    TagField,
     TagItem,
     TagListResult,
     TagRef,
@@ -62,10 +80,39 @@ from passagen_mcp.schemas import (
 
 MAX_SEARCH_PAPERS = 100
 MAX_EXPLICIT_SEARCH_PAPERS = 50
+DEFAULT_PAPER_FIELDS = (PaperField.ID, PaperField.TITLE, PaperField.YEAR, PaperField.TAGS)
+RESOLUTION_PAPER_FIELDS = (
+    PaperField.ID,
+    PaperField.TITLE,
+    PaperField.YEAR,
+    PaperField.DOI,
+    PaperField.ARXIV_ID,
+)
+DEFAULT_TAG_FIELDS = (TagField.ID, TagField.NAME, TagField.PAPER_COUNT)
 
 
 class LibraryRequestError(ValueError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "validation_error",
+        details: dict[str, object] | None = None,
+        hint: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details
+        self.hint = hint
+
+    def __str__(self) -> str:
+        parts = [f"{self.code}: {super().__str__()}"]
+        if self.details:
+            rendered = ", ".join(f"{key}={value!r}" for key, value in self.details.items())
+            parts.append(f"details: {rendered}")
+        if self.hint:
+            parts.append(f"hint: {self.hint}")
+        return "; ".join(parts)
 
 
 class LibraryReader:
@@ -106,25 +153,12 @@ class LibraryReader:
         unfiled: bool = False,
         sort: PaperSort = PaperSort.IMPORTED_AT,
         direction: SortDirection = SortDirection.DESC,
-        page_size: int = 20,
-        cursor: str | None = None,
+        fields: Sequence[PaperField] = DEFAULT_PAPER_FIELDS,
+        offset: int = 0,
+        limit: int = 100,
     ) -> PaperListResult:
-        if not 1 <= page_size <= 100:
-            raise LibraryRequestError("page_size must be between 1 and 100")
-        criteria = {
-            "title_query": title_query,
-            "status": status.value if status else None,
-            "tag_ids": list(tag_ids),
-            "tag_match": tag_match.value,
-            "venue": venue,
-            "year": year,
-            "collection_id": collection_id,
-            "unfiled": unfiled,
-            "sort": sort.value,
-            "direction": direction.value,
-            "page_size": page_size,
-        }
-        offset = _decode_cursor(cursor, criteria)
+        self._validate_page(offset, limit)
+        selected = self._paper_fields(fields)
         self._validate_scope(tag_ids, collection_id)
         page = self.catalog.list_papers(
             PaperFilters(
@@ -139,18 +173,78 @@ class LibraryReader:
             ),
             sort=sort,
             direction=direction,
-            limit=page_size,
+            limit=limit,
             offset=offset,
         )
-        tags, collections = self._references()
-        next_offset = offset + len(page.items)
-        return PaperListResult(
-            items=[self._list_item(paper, tags, collections) for paper in page.items],
+        return self._paper_page(
+            page.items,
             total=page.total,
-            next_cursor=(
-                _encode_cursor(next_offset, criteria) if next_offset < page.total else None
-            ),
+            offset=offset,
+            limit=limit,
+            fields=selected,
         )
+
+    def get_papers(
+        self,
+        paper_ids: Sequence[str],
+        *,
+        fields: Sequence[PaperField] = DEFAULT_PAPER_FIELDS,
+    ) -> PaperBatchResult:
+        ids = self._bounded_unique_ids(paper_ids, name="paper_ids")
+        selected = self._paper_fields(fields)
+        papers = self.catalog.get_papers(ids)
+        found = {paper.id for paper in papers}
+        return PaperBatchResult(
+            items=self._project_papers(papers, selected),
+            not_found=[paper_id for paper_id in ids if paper_id not in found],
+        )
+
+    def resolve_papers(
+        self,
+        *,
+        ids: Sequence[str] = (),
+        titles: Sequence[str] = (),
+        dois: Sequence[str] = (),
+        arxiv_ids: Sequence[str] = (),
+        fields: Sequence[PaperField] = RESOLUTION_PAPER_FIELDS,
+    ) -> PaperResolutionResult:
+        inputs = [*ids, *titles, *dois, *arxiv_ids]
+        if not inputs:
+            raise LibraryRequestError(
+                "at least one identifier is required", code="invalid_argument"
+            )
+        if len(inputs) > 100:
+            raise LibraryRequestError("at most 100 identifiers may be resolved")
+        selected = self._paper_fields(fields)
+        papers = self._all_papers()
+        indices = {
+            "id": self._index_papers(papers, lambda paper: paper.id),
+            "title": self._index_papers(papers, lambda paper: _normalize_title(paper.title)),
+            "doi": self._index_papers(papers, lambda paper: _normalize_doi(paper.doi)),
+            "arxiv_id": self._index_papers(
+                papers, lambda paper: _normalize_arxiv_id(paper.arxiv_id)
+            ),
+        }
+        requests = (
+            [("id", value, value) for value in ids]
+            + [("title", value, _normalize_title(value)) for value in titles]
+            + [("doi", value, _normalize_doi(value)) for value in dois]
+            + [("arxiv_id", value, _normalize_arxiv_id(value)) for value in arxiv_ids]
+        )
+        results = []
+        for kind, original, normalized in requests:
+            matches = indices[kind].get(normalized, []) if normalized else []
+            results.append(
+                PaperResolutionItem(
+                    input=original,
+                    kind=kind,
+                    status=(
+                        "matched" if len(matches) == 1 else "ambiguous" if matches else "not_found"
+                    ),
+                    matches=self._project_papers(matches, selected),
+                )
+            )
+        return PaperResolutionResult(results=results)
 
     def get_paper_context(
         self,
@@ -210,40 +304,215 @@ class LibraryReader:
             remote_checked_at=citation.remote_checked_at,
         )
 
-    def list_tags(self) -> TagListResult:
-        return TagListResult(
-            items=[
-                TagItem(
-                    id=tag.id,
-                    name=tag.name,
-                    color=tag.color,
-                    created_at=tag.created_at,
-                    paper_count=tag.paper_count,
-                )
-                for tag in self.catalog.list_tag_usage()
-            ]
-        )
-
-    def list_collections(self) -> CollectionListResult:
+    def list_tags(
+        self,
+        *,
+        fields: Sequence[TagField] = DEFAULT_TAG_FIELDS,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> TagListResult:
+        self._validate_page(offset, limit)
+        selected = set(fields) | {TagField.ID, TagField.NAME}
+        tags = self.catalog.list_tag_usage()
+        page = tags[offset : offset + limit]
         items = []
-        for item in self.catalog.list_collections():
+        for tag in page:
+            values = {
+                TagField.ID: tag.id,
+                TagField.NAME: tag.name,
+                TagField.COLOR: tag.color,
+                TagField.CREATED_AT: tag.created_at,
+                TagField.PAPER_COUNT: tag.paper_count,
+            }
+            items.append({field.value: values[field] for field in TagField if field in selected})
+        return TagListResult(items=items, **_page_values(offset, limit, len(tags), len(items)))
+
+    def list_collections(self, *, offset: int = 0, limit: int = 100) -> CollectionListResult:
+        self._validate_page(offset, limit)
+        collections = self.catalog.list_collections()
+        items = []
+        for item in collections[offset : offset + limit]:
             collection = self.catalog.get_collection(item.id)
             items.append(self._collection_item(collection, len(collection.papers)))
-        return CollectionListResult(items=items)
+        return CollectionListResult(
+            items=items, **_page_values(offset, limit, len(collections), len(items))
+        )
+
+    def create_tag(self, name: str, color: str | None = None) -> TagItem:
+        return self._tag_item(self.catalog.create_tag(name, color), paper_count=0)
+
+    def update_tag(
+        self,
+        tag_id: str,
+        *,
+        name: str | None = None,
+        color: str | None = None,
+        clear_color: bool = False,
+    ) -> TagItem:
+        if name is None and color is None and not clear_color:
+            raise LibraryRequestError("at least one tag field is required", code="invalid_argument")
+        if color is not None and clear_color:
+            raise LibraryRequestError(
+                "color and clear_color cannot be used together", code="invalid_argument"
+            )
+        current = self.catalog.get_tag(tag_id)
+        updated = self.catalog.update_tag(
+            tag_id,
+            name=name,
+            color=None if clear_color else color if color is not None else current.color,
+        )
+        usage = next(tag for tag in self.catalog.list_tag_usage() if tag.id == tag_id)
+        return self._tag_item(updated, paper_count=usage.paper_count)
 
     def create_collection(self, name: str, description: str | None = None) -> CollectionDetail:
         collection = self.catalog.create_collection(name, description)
         return self.get_collection(collection.id)
 
+    def update_collection(
+        self,
+        collection_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        clear_description: bool = False,
+    ) -> CollectionItem:
+        if name is None and description is None and not clear_description:
+            raise LibraryRequestError(
+                "at least one collection field is required", code="invalid_argument"
+            )
+        if description is not None and clear_description:
+            raise LibraryRequestError(
+                "description and clear_description cannot be used together",
+                code="invalid_argument",
+            )
+        current = self.catalog.get_collection(collection_id)
+        updated = self.catalog.update_collection(
+            collection_id,
+            name=name,
+            description=(
+                None
+                if clear_description
+                else description
+                if description is not None
+                else current.description
+            ),
+        )
+        return self._collection_item(updated, len(updated.papers))
+
     def add_papers_to_collection(
-        self, collection_id: str, paper_ids: Sequence[str]
-    ) -> CollectionDetail:
-        if not paper_ids:
-            raise LibraryRequestError("paper_ids must contain at least one paper ID")
-        if len(paper_ids) > 100:
-            raise LibraryRequestError("paper_ids must contain at most 100 paper IDs")
-        collection = self.catalog.add_collection_papers(collection_id, list(paper_ids))
-        return self.get_collection(collection.id)
+        self,
+        collection_id: str,
+        paper_ids: Sequence[str],
+        *,
+        dry_run: bool = False,
+        atomic: bool = False,
+    ) -> CollectionPaperMutationResult:
+        ids = self._bounded_unique_ids(paper_ids, name="paper_ids")
+        collection = self.catalog.get_collection(collection_id)
+        found = {paper.id for paper in self.catalog.get_papers(ids)}
+        existing = {member.paper_id for member in collection.papers}
+        missing = set(ids) - found
+        to_add = [paper_id for paper_id in ids if paper_id in found and paper_id not in existing]
+        blocked = atomic and bool(missing)
+        results = []
+        for paper_id in ids:
+            if paper_id in missing:
+                status, reason = "not_found", "paper_not_found"
+            elif paper_id in existing:
+                status, reason = "already_present", None
+            elif blocked:
+                status, reason = "skipped", "atomic_batch_not_applied"
+            else:
+                status, reason = ("would_add" if dry_run else "added"), None
+            results.append(
+                CollectionPaperMutationItem(paper_id=paper_id, status=status, reason=reason)
+            )
+        applied = [] if blocked else to_add
+        if applied and not dry_run:
+            collection = self.catalog.add_collection_papers(collection_id, applied)
+        affected = len(applied)
+        total = len(collection.papers) + (affected if dry_run else 0)
+        return CollectionPaperMutationResult(
+            dry_run=dry_run,
+            atomic=atomic,
+            affected=affected,
+            skipped=len(ids) - affected,
+            collection_total=total,
+            results=results,
+        )
+
+    def update_paper_tags(
+        self,
+        paper_ids: Sequence[str],
+        *,
+        tags_add: Sequence[str] = (),
+        tags_remove: Sequence[str] = (),
+        dry_run: bool = False,
+    ) -> PaperTagMutationResult:
+        ids = self._bounded_unique_ids(paper_ids, name="paper_ids")
+        add = list(dict.fromkeys(tags_add))
+        remove = list(dict.fromkeys(tags_remove))
+        if not add and not remove:
+            raise LibraryRequestError(
+                "tags_add or tags_remove is required", code="invalid_argument"
+            )
+        overlap = sorted(set(add) & set(remove))
+        if overlap:
+            raise LibraryRequestError(
+                "tags_add and tags_remove overlap",
+                code="invalid_argument",
+                details={"tag_ids": overlap},
+            )
+        known_tags = {tag.id for tag in self.catalog.list_tags()}
+        unknown_tags = [tag_id for tag_id in [*add, *remove] if tag_id not in known_tags]
+        if unknown_tags:
+            raise LibraryRequestError(
+                "unknown tag IDs",
+                code="not_found",
+                details={"tag_ids": unknown_tags},
+            )
+        papers = {paper.id: paper for paper in self.catalog.get_papers(ids)}
+        results = []
+        affected = 0
+        for paper_id in ids:
+            paper = papers.get(paper_id)
+            if paper is None:
+                results.append(
+                    PaperTagMutationItem(
+                        paper_id=paper_id,
+                        status="not_found",
+                        tags_added=[],
+                        tags_removed=[],
+                        reason="paper_not_found",
+                    )
+                )
+                continue
+            current = set(paper.tag_ids)
+            added = [tag_id for tag_id in add if tag_id not in current]
+            removed = [tag_id for tag_id in remove if tag_id in current]
+            if not added and not removed:
+                status = "unchanged"
+            else:
+                status = "would_update" if dry_run else "updated"
+                affected += 1
+                if not dry_run:
+                    target = [tag_id for tag_id in paper.tag_ids if tag_id not in remove]
+                    target.extend(tag_id for tag_id in add if tag_id not in current)
+                    self.catalog.set_paper_tags(paper_id, target)
+            results.append(
+                PaperTagMutationItem(
+                    paper_id=paper_id,
+                    status=status,
+                    tags_added=added,
+                    tags_removed=removed,
+                )
+            )
+        return PaperTagMutationResult(
+            dry_run=dry_run,
+            affected=affected,
+            skipped=len(ids) - affected,
+            results=results,
+        )
 
     def get_collection(self, collection_id: str) -> CollectionDetail:
         collection = self.catalog.get_collection(collection_id)
@@ -267,14 +536,35 @@ class LibraryReader:
         self,
         collection_id: str,
         *,
-        include_papers: bool = True,
+        include_papers: bool = False,
         include_synthesis: bool = True,
+        paper_fields: Sequence[PaperField] = DEFAULT_PAPER_FIELDS,
+        paper_offset: int = 0,
+        paper_limit: int = 100,
     ) -> CollectionContextResult:
-        detail = self.get_collection(collection_id)
+        self._validate_page(paper_offset, paper_limit)
+        collection = self.catalog.get_collection(collection_id)
         result = CollectionContextResult(
-            collection=CollectionItem.model_validate(detail.model_dump(exclude={"papers"})),
-            papers=detail.papers if include_papers else None,
+            collection=self._collection_item(collection, len(collection.papers)),
         )
+        if include_papers:
+            selected_members = collection.papers[paper_offset : paper_offset + paper_limit]
+            papers = self.catalog.get_papers([member.paper_id for member in selected_members])
+            projected = self._project_papers(papers, self._paper_fields(paper_fields))
+            result.papers = PaperListResult(
+                items=[
+                    {
+                        "paper": paper,
+                        "position": member.position,
+                        "note": member.note,
+                        "added_at": member.added_at,
+                    }
+                    for member, paper in zip(selected_members, projected, strict=True)
+                ],
+                **_page_values(
+                    paper_offset, paper_limit, len(collection.papers), len(selected_members)
+                ),
+            )
         if include_synthesis:
             synthesis = self.syntheses.latest(collection_id)
             if synthesis is None:
@@ -294,6 +584,83 @@ class LibraryReader:
                     resource_uri=f"passagen://collections/{collection_id}/synthesis",
                 )
         return result
+
+    def list_collection_documents(
+        self,
+        collection_id: str,
+        *,
+        include: Sequence[CollectionDocumentInclude] = (),
+        offset: int = 0,
+        limit: int = 100,
+    ) -> CollectionDocumentListResult:
+        self._validate_page(offset, limit)
+        manual = [
+            self._collection_document(item)
+            for item in self.catalog.list_collection_documents(collection_id)
+        ]
+        generated = [
+            self._report_document(view) for view in self.reports.list_reports(collection_id)
+        ]
+        documents = sorted(
+            [*manual, *generated], key=lambda item: (item.updated_at, item.id), reverse=True
+        )
+        selected = set(include)
+        items = []
+        for document in documents[offset : offset + limit]:
+            excluded = set()
+            if CollectionDocumentInclude.PAPERS not in selected:
+                excluded.add("papers")
+            if CollectionDocumentInclude.PAPER_CHANGES not in selected:
+                excluded.add("paper_changes")
+            items.append(document.model_dump(mode="json", exclude=excluded))
+        return CollectionDocumentListResult(
+            items=items,
+            **_page_values(offset, limit, len(documents), len(items)),
+        )
+
+    def get_collection_document(
+        self, collection_id: str, document_id: str
+    ) -> CollectionDocumentView:
+        manual = next(
+            (
+                item
+                for item in self.catalog.list_collection_documents(collection_id)
+                if item.id == document_id
+            ),
+            None,
+        )
+        if manual is not None:
+            return CollectionDocumentView(
+                **self._collection_document(manual).model_dump(),
+                markdown=manual.content_markdown,
+            )
+        report = self.reports.get_report(document_id)
+        if report.record.collection_id != collection_id:
+            raise CatalogNotFoundError(f"Collection document not found: {document_id}")
+        return CollectionDocumentView(
+            **self._report_document(report).model_dump(),
+            markdown=(
+                report.record.edited_markdown
+                or (render_report_markdown(report.report) if report.report is not None else None)
+            ),
+        )
+
+    def create_collection_document(
+        self,
+        collection_id: str,
+        *,
+        title: str,
+        markdown: str,
+        external_id: str | None = None,
+    ) -> CollectionDocumentItem:
+        document = self.catalog.create_collection_document(
+            collection_id,
+            title=title,
+            content_markdown=markdown,
+            source="mcp",
+            external_id=external_id,
+        )
+        return self._collection_document(document)
 
     def list_collection_reports(self, collection_id: str) -> CollectionReportListResult:
         self.catalog.get_collection(collection_id)
@@ -376,6 +743,85 @@ class LibraryReader:
             truncated=truncated,
         )
 
+    def _collection_document(self, document: Any) -> CollectionDocumentItem:
+        papers = [CollectionDocumentPaper(id=item.id, title=item.title) for item in document.papers]
+        return CollectionDocumentItem(
+            id=document.id,
+            collection_id=document.collection_id,
+            title=document.title,
+            document_type="manual",
+            kind="markdown",
+            status="ready",
+            editable=True,
+            source=document.source,
+            external_id=document.external_id,
+            revision=document.revision,
+            papers=papers,
+            paper_changes=self._paper_changes(document.collection_id, papers),
+            created_at=document.created_at,
+            updated_at=document.updated_at,
+            resource_uri=(
+                f"passagen://collections/{document.collection_id}/documents/{document.id}"
+            ),
+        )
+
+    def _report_document(self, view: CoreReportView) -> CollectionDocumentItem:
+        try:
+            snapshot = SourceSnapshot.model_validate_json(view.record.source_snapshot_json)
+        except ValidationError:
+            snapshot = None
+        papers = [
+            CollectionDocumentPaper(id=paper.paper_id, title=paper.title)
+            for paper in (
+                snapshot.collection.papers
+                if snapshot is not None and snapshot.collection is not None
+                else []
+            )
+        ]
+        return CollectionDocumentItem(
+            id=view.record.id,
+            collection_id=view.record.collection_id,
+            title=view.record.title,
+            document_type="generated",
+            kind=view.record.kind.value,
+            status=view.record.status,
+            editable=view.record.status == "completed",
+            source="generated",
+            external_id=None,
+            revision=view.record.revision,
+            papers=papers,
+            paper_changes=self._paper_changes(view.record.collection_id, papers),
+            created_at=view.record.created_at,
+            updated_at=view.record.updated_at or view.record.completed_at or view.record.created_at,
+            resource_uri=(
+                f"passagen://collections/{view.record.collection_id}/documents/{view.record.id}"
+            ),
+        )
+
+    def _paper_changes(
+        self, collection_id: str, saved: list[CollectionDocumentPaper]
+    ) -> CollectionDocumentPaperChanges:
+        collection = self.catalog.get_collection(collection_id)
+        current = [
+            CollectionDocumentPaper(
+                id=member.paper_id,
+                title=self.catalog.get_paper(member.paper_id).title,
+            )
+            for member in collection.papers
+        ]
+        saved_ids = [paper.id for paper in saved]
+        current_ids = [paper.id for paper in current]
+        saved_set = set(saved_ids)
+        current_set = set(current_ids)
+        return CollectionDocumentPaperChanges(
+            added=[paper for paper in current if paper.id not in saved_set],
+            removed=[paper for paper in saved if paper.id not in current_set],
+            order_changed=(
+                [paper_id for paper_id in saved_ids if paper_id in current_set]
+                != [paper_id for paper_id in current_ids if paper_id in saved_set]
+            ),
+        )
+
     def get_section(self, paper_id: str, ordinal: int) -> dict[str, object]:
         self.catalog.get_paper(paper_id)
         loaded = self._parsed(paper_id)
@@ -393,6 +839,108 @@ class LibraryReader:
             "text": section.text,
             "artifact_sha256": sha256,
         }
+
+    def _paper_page(
+        self,
+        papers: Sequence[PaperView],
+        *,
+        total: int,
+        offset: int,
+        limit: int,
+        fields: set[PaperField],
+    ) -> PaperListResult:
+        items = self._project_papers(papers, fields)
+        return PaperListResult(
+            items=items,
+            **_page_values(offset, limit, total, len(items)),
+        )
+
+    def _project_papers(
+        self, papers: Sequence[PaperView], fields: set[PaperField]
+    ) -> list[dict[str, Any]]:
+        tags = (
+            {tag.id: TagRef(id=tag.id, name=tag.name) for tag in self.catalog.list_tags()}
+            if PaperField.TAGS in fields
+            else {}
+        )
+        collections = (
+            {
+                item.id: CollectionRef(id=item.id, name=item.name)
+                for item in self.catalog.list_collections()
+            }
+            if PaperField.COLLECTIONS in fields
+            else {}
+        )
+        items = []
+        for paper in papers:
+            values: dict[PaperField, Any] = {
+                PaperField.ID: paper.id,
+                PaperField.TITLE: paper.title,
+                PaperField.AUTHORS: list(paper.authors),
+                PaperField.YEAR: paper.year,
+                PaperField.VENUE: paper.venue,
+                PaperField.DOI: paper.doi,
+                PaperField.ARXIV_ID: paper.arxiv_id,
+                PaperField.STATUS: paper.status.value,
+                PaperField.UPDATED_AT: paper.updated_at,
+                PaperField.RESOURCE_URI: f"passagen://papers/{paper.id}",
+            }
+            if PaperField.TAGS in fields:
+                values[PaperField.TAGS] = [tags[tag_id].model_dump() for tag_id in paper.tag_ids]
+            if PaperField.COLLECTIONS in fields:
+                values[PaperField.COLLECTIONS] = [
+                    collections[item_id].model_dump() for item_id in paper.collection_ids
+                ]
+            if PaperField.ARTIFACTS in fields:
+                values[PaperField.ARTIFACTS] = self._availability(paper).model_dump()
+            items.append({field.value: values[field] for field in PaperField if field in fields})
+        return items
+
+    def _paper_fields(self, fields: Sequence[PaperField]) -> set[PaperField]:
+        return set(fields) | {PaperField.ID}
+
+    def _all_papers(self) -> list[PaperView]:
+        papers: list[PaperView] = []
+        offset = 0
+        while True:
+            page = self.catalog.list_papers(limit=200, offset=offset)
+            papers.extend(page.items)
+            offset += len(page.items)
+            if offset >= page.total:
+                return papers
+
+    @staticmethod
+    def _index_papers(
+        papers: Sequence[PaperView], key: Callable[[PaperView], str | None]
+    ) -> dict[str, list[PaperView]]:
+        result: dict[str, list[PaperView]] = {}
+        for paper in papers:
+            value = key(paper)
+            if value:
+                result.setdefault(value, []).append(paper)
+        return result
+
+    @staticmethod
+    def _validate_page(offset: int, limit: int) -> None:
+        if offset < 0:
+            raise LibraryRequestError("offset must be non-negative", code="invalid_argument")
+        if not 1 <= limit <= 200:
+            raise LibraryRequestError("limit must be between 1 and 200", code="invalid_argument")
+
+    @staticmethod
+    def _bounded_unique_ids(values: Sequence[str], *, name: str) -> list[str]:
+        ids = list(values)
+        if not ids:
+            raise LibraryRequestError(
+                f"{name} must contain at least one ID", code="invalid_argument"
+            )
+        if len(ids) > 100:
+            raise LibraryRequestError(f"{name} must contain at most 100 IDs")
+        if len(ids) != len(set(ids)):
+            raise LibraryRequestError(
+                f"{name} must not contain duplicates", code="invalid_argument"
+            )
+        return ids
 
     def _validate_scope(self, tag_ids: Sequence[str], collection_id: str | None) -> None:
         known_tags = {tag.id for tag in self.catalog.list_tags()}
@@ -434,6 +982,16 @@ class LibraryReader:
             for item in self.catalog.list_collections()
         }
         return tags, collections
+
+    @staticmethod
+    def _tag_item(tag: Any, *, paper_count: int) -> TagItem:
+        return TagItem(
+            id=tag.id,
+            name=tag.name,
+            color=tag.color,
+            created_at=tag.created_at,
+            paper_count=paper_count,
+        )
 
     def _metadata(
         self,
@@ -572,33 +1130,38 @@ class LibraryReader:
             raise InvalidArtifactError("Extracted text artifact is invalid") from exc
 
 
-def _criteria_digest(criteria: Mapping[str, object]) -> str:
-    encoded = json.dumps(criteria, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode()).hexdigest()[:16]
+def _page_values(offset: int, limit: int, total: int, returned: int) -> dict[str, Any]:
+    next_offset = offset + returned
+    has_more = next_offset < total
+    return {
+        "offset": offset,
+        "limit": limit,
+        "returned": returned,
+        "total": total,
+        "next_offset": next_offset if has_more else None,
+        "has_more": has_more,
+    }
 
 
-def _encode_cursor(offset: int, criteria: Mapping[str, object]) -> str:
-    payload = json.dumps(
-        {"v": 1, "offset": offset, "criteria": _criteria_digest(criteria)},
-        separators=(",", ":"),
-    ).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+def _normalize_title(value: str | None) -> str | None:
+    return " ".join(value.casefold().split()) if value else None
 
 
-def _decode_cursor(cursor: str | None, criteria: Mapping[str, object]) -> int:
-    if cursor is None:
-        return 0
-    try:
-        padding = "=" * (-len(cursor) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(cursor + padding))
-        if (
-            not isinstance(payload, dict)
-            or payload.get("v") != 1
-            or payload.get("criteria") != _criteria_digest(criteria)
-            or not isinstance(payload.get("offset"), int)
-            or payload["offset"] < 0
-        ):
-            raise ValueError
-        return int(payload["offset"])
-    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise LibraryRequestError("Invalid cursor for the requested paper filters") from exc
+def _normalize_doi(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().casefold()
+    for prefix in ("https://doi.org/", "http://doi.org/", "doi:"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix) :]
+            break
+    return normalized or None
+
+
+def _normalize_arxiv_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.strip().casefold()
+    if normalized.startswith("arxiv:"):
+        normalized = normalized[6:].strip()
+    return normalized or None
